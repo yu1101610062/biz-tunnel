@@ -1,0 +1,45 @@
+# Demo QUIC agent config. Replace tests/fixtures paths with site certificates.
+
+role = "agent"
+
+[tunnel]
+id = "room-a-to-room-b"
+node_id = "a-agent-1"
+relay_addr = "10.20.0.10:9443"
+token = "change-me-long-random-token"
+
+[transport]
+mode = "quic"
+fallback = []
+connect_timeout_secs = 10
+idle_timeout_secs = 300
+max_frame_bytes = 1048576
+
+[security]
+mode = "token"
+ca_cert = "tests/fixtures/quic/ca.pem"
+server_name = "localhost"
+expected_peer_cert_sha256 = "7d1b1548bb35bca623e35a75ecf7032280ac7d226ba9f94175f9e4e56211cec9"
+
+[admin]
+listen = "127.0.0.1:18081"
+
+[defaults]
+drain_timeout_secs = 30
+dial_timeout_secs = 5
+
+[[b_to_a]]
+name = "a-order-grpc"
+expose_on_relay = "0.0.0.0:15001"
+target_from_agent = "10.10.1.20:50051"
+
+[[b_to_a]]
+name = "a-file-http"
+expose_on_relay = "0.0.0.0:15002"
+target_from_agent = "10.10.1.21:8080"
+
+[[a_to_b]]
+name = "b-inventory-http"
+expose_on_agent = "0.0.0.0:16001"
+target_from_relay = "10.20.1.30:8080"
+allowed_sources = ["10.10.0.0/16"]

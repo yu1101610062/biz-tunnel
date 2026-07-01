@@ -1,0 +1,12 @@
+/target/
+/.analysis/
+/.agents/
+/.codex/
+
+*.deb
+*.log
+*.pid
+
+.env
+.env.*
+!.env.example

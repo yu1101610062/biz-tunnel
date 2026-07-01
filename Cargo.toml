@@ -1,0 +1,17 @@
+[package]
+name = "biz-tunnel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hex = "0.4.3"
+quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23.37", default-features = false, features = ["std", "ring"] }
+rustls-pemfile = "2.2.0"
+serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "0.10.9"
+toml = "1.1.0"
+tokio = { version = "1.50.0", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"

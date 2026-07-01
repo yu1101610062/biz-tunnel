@@ -1,0 +1,41 @@
+role = "relay"
+
+[tunnel]
+id = "room-a-to-room-b"
+node_id = "b-relay-1"
+listen = "0.0.0.0:9443"
+token = "change-me-long-random-token"
+
+[transport]
+mode = "tcp"
+fallback = []
+connect_timeout_secs = 10
+idle_timeout_secs = 300
+max_frame_bytes = 1048576
+
+[security]
+mode = "token"
+
+[admin]
+listen = "127.0.0.1:18080"
+
+[defaults]
+drain_timeout_secs = 30
+dial_timeout_secs = 5
+
+[[b_to_a]]
+name = "a-order-grpc"
+expose_on_relay = "0.0.0.0:15001"
+target_from_agent = "10.10.1.20:50051"
+allowed_sources = ["10.20.0.0/16"]
+
+[[b_to_a]]
+name = "a-file-http"
+expose_on_relay = "0.0.0.0:15002"
+target_from_agent = "10.10.1.21:8080"
+allowed_sources = ["10.20.0.0/16"]
+
+[[a_to_b]]
+name = "b-inventory-http"
+expose_on_agent = "0.0.0.0:16001"
+target_from_relay = "10.20.1.30:8080"
