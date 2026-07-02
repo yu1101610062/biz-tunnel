@@ -425,7 +425,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
   <header>
     <div>
       <h1>中继拓扑配置</h1>
-      <div class="muted">在流程图中添加节点、连接通讯路径并生成两端配置 · ui-route-nodes-20260702</div>
+      <div class="muted">在流程图中添加节点、连接通讯路径并生成两端配置 · ui-route-arrows-20260702</div>
     </div>
     <div class="toolbar">
       <span id="statusChip" class="status-chip offline">agent 未连接 relay</span>
@@ -745,9 +745,9 @@ const ADMIN_UI: &str = r##"<!doctype html>
     }
 
     function colorOf(path) {
-      if (path.color === "green" || path.direction === "b_to_a") return "#15945b";
-      if (path.color === "amber") return "#b7791f";
-      return "#2563eb";
+      if (path.color === "green" || path.direction === "b_to_a") return "#39d98a";
+      if (path.color === "amber") return "#f2b84b";
+      return "#5aa7ff";
     }
 
     function renderLinks() {
@@ -755,7 +755,17 @@ const ADMIN_UI: &str = r##"<!doctype html>
       const box = canvas.getBoundingClientRect();
       const svg = $("links");
       svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
-      svg.innerHTML = "";
+      svg.innerHTML = `<defs>
+        <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#5aa7ff"></path>
+        </marker>
+        <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#39d98a"></path>
+        </marker>
+        <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#f2b84b"></path>
+        </marker>
+      </defs>`;
       $("pathLabels").innerHTML = "";
 
       const linkGroups = new Map();
@@ -785,6 +795,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
         line.setAttribute("stroke", colorOf(path));
         line.setAttribute("stroke-width", state.selection.id === path.id ? "3" : "2");
         line.setAttribute("stroke-linecap", "round");
+        line.setAttribute("marker-end", `url(#arrow-${path.color === "amber" ? "amber" : path.direction === "b_to_a" || path.color === "green" ? "green" : "blue"})`);
         svg.appendChild(line);
 
         const label = document.createElement("div");
