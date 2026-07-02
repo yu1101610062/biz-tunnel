@@ -19,6 +19,8 @@ async fn proxies_b_to_a_and_a_to_b_over_agent_initiated_tunnel() {
     let tunnel_port = free_port();
     let b_expose_port = free_port();
     let a_expose_port = free_port();
+    let relay_admin_port = free_port();
+    let agent_admin_port = free_port();
     let dir = tempfile::tempdir().expect("tempdir");
 
     let relay_config_path = dir.path().join("relay.toml");
@@ -34,7 +36,10 @@ listen = "127.0.0.1:{tunnel_port}"
 token = "secret-token"
 
 [admin]
-listen = "127.0.0.1:0"
+listen = "127.0.0.1:{relay_admin_port}"
+
+[defaults]
+dial_timeout_secs = 1
 
 [[b_to_a]]
 name = "a-echo"
@@ -62,7 +67,10 @@ relay_addr = "127.0.0.1:{tunnel_port}"
 token = "secret-token"
 
 [admin]
-listen = "127.0.0.1:0"
+listen = "127.0.0.1:{agent_admin_port}"
+
+[defaults]
+dial_timeout_secs = 1
 
 [[b_to_a]]
 name = "a-echo"
@@ -86,6 +94,35 @@ target_from_relay = "{b_target}"
 
     wait_for_tcp(("127.0.0.1", b_expose_port)).await;
     wait_for_tcp(("127.0.0.1", a_expose_port)).await;
+    wait_for_tcp(("127.0.0.1", relay_admin_port)).await;
+    wait_for_tcp(("127.0.0.1", agent_admin_port)).await;
+
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if relay.status().await.agent_connected {
+                return;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("agent should connect");
+
+    let relay_test = http_post(relay_admin_port, "/v1/services/test/a-echo").await;
+    assert!(
+        relay_test.contains(r#""status":"ok""#),
+        "unexpected relay route test: {relay_test}"
+    );
+    let agent_test = http_post(agent_admin_port, "/v1/services/test/b-echo").await;
+    assert!(
+        agent_test.contains(r#""status":"ok""#),
+        "unexpected agent route test: {agent_test}"
+    );
+    let skipped = http_post(relay_admin_port, "/v1/services/test/b-echo").await;
+    assert!(
+        skipped.contains(r#""status":"skipped""#),
+        "unexpected skipped route test: {skipped}"
+    );
 
     let b_to_a_reply = round_trip(("127.0.0.1", b_expose_port), b"from-b").await;
     assert_eq!(b_to_a_reply, b"a:from-b");
@@ -322,6 +359,25 @@ async fn http_get(port: u16, path: &str) -> String {
         .await
         .expect("connect admin");
     let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
+}
+
+async fn http_post(port: u16, path: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect admin");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
     stream
         .write_all(request.as_bytes())
         .await

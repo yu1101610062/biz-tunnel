@@ -608,6 +608,7 @@ async fn handle_admin_connection(
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or_default();
+    let path = path.split('?').next().unwrap_or(path);
     let public_path = matches!(path, "/healthz" | "/readyz" | "/" | "/ui");
     let admin_token = state
         .config
@@ -676,6 +677,10 @@ async fn handle_admin_connection(
                 None => HttpResponse::json("404 Not Found", "{\"error\":\"not found\"}\n".into()),
             }
         }
+        ("POST", path) if path.starts_with("/v1/services/test/") => {
+            let name = path.trim_start_matches("/v1/services/test/");
+            HttpResponse::json("200 OK", service_test_json(&state, name).await)
+        }
         ("GET", "/metrics") => {
             let config = state.config.read().await.clone();
             let connections = state.connections.lock().await;
@@ -711,6 +716,134 @@ async fn handle_admin_connection(
     )
     .await?;
     Ok(())
+}
+
+async fn service_test_json(state: &Arc<SharedState>, name: &str) -> String {
+    let config = state.config.read().await.clone();
+    let Some(service) = config.service_by_name(name).cloned() else {
+        if let Some(service) = topology_configs(&config)
+            .iter()
+            .find_map(|config| config.service_by_name(name).cloned())
+        {
+            return service_test_result_json(
+                &service,
+                "skipped",
+                &format!(
+                    "该路径监听在 {} 侧，请到对应页面测试",
+                    route_owner_label(service.direction)
+                ),
+            );
+        }
+        return format!(
+            "{{\"status\":\"not_found\",\"service\":\"{}\",\"message\":\"未找到路径\"}}\n",
+            json_escape(name)
+        );
+    };
+
+    if !should_listen(config.role, service.direction) {
+        return format!(
+            "{{\"status\":\"skipped\",\"service\":\"{}\",\"direction\":\"{}\",\"message\":\"该路径监听在 {} 侧，请到对应页面测试\"}}\n",
+            json_escape(&service.name),
+            direction_label(service.direction),
+            route_owner_label(service.direction)
+        );
+    }
+    if !state.wait_for_tunnel().await {
+        return service_test_result_json(&service, "failed", "隧道未连接");
+    }
+
+    let result = match config.transport.mode {
+        TransportMode::Quic => test_quic_service(state, &config, &service).await,
+        TransportMode::Tcp | TransportMode::TlsTcp => {
+            test_tcp_service(state, &config, &service).await
+        }
+    };
+    match result {
+        Ok(()) => service_test_result_json(&service, "ok", "已通过隧道拨通对端目标 TCP 端口"),
+        Err(error) => service_test_result_json(&service, "failed", &error.to_string()),
+    }
+}
+
+async fn test_tcp_service(
+    state: &Arc<SharedState>,
+    config: &Config,
+    service: &Service,
+) -> Result<(), RuntimeError> {
+    let stream_id = state.allocate_stream_id();
+    let (events_tx, mut events_rx) = mpsc::channel(1);
+    state.streams.lock().await.insert(stream_id, events_tx);
+    state
+        .send_frame(Frame {
+            kind: FRAME_OPEN,
+            stream_id,
+            payload: encode_open_payload(service, test_source_addr(), unix_ms()),
+        })
+        .await?;
+
+    let wait = service_test_wait(config, service);
+    let result = match timeout(wait, events_rx.recv()).await {
+        Ok(Some(StreamEvent::Close)) | Ok(None) => {
+            Err(RuntimeError::Config("对端目标 TCP 端口不可达".into()))
+        }
+        Ok(Some(StreamEvent::Data(_))) | Ok(Some(StreamEvent::FinishWrite)) | Err(_) => Ok(()),
+    };
+    let _ = state
+        .send_frame(Frame {
+            kind: FRAME_CLOSE,
+            stream_id,
+            payload: Vec::new(),
+        })
+        .await;
+    state.streams.lock().await.remove(&stream_id);
+    result
+}
+
+async fn test_quic_service(
+    state: &Arc<SharedState>,
+    config: &Config,
+    service: &Service,
+) -> Result<(), RuntimeError> {
+    let connection = state.quic_connection.read().await.clone();
+    let Some(connection) = connection else {
+        return Err(RuntimeError::TunnelUnavailable);
+    };
+    let (mut send, mut recv) = connection.open_bi().await.map_err(quic_error)?;
+    quic_transport::write_stream_message(
+        &mut send,
+        quic_transport::STREAM_OPEN,
+        &encode_open_payload(service, test_source_addr(), unix_ms()),
+    )
+    .await
+    .map_err(quic_error)?;
+    let _ = send.finish();
+
+    let mut buf = [0_u8; 1];
+    match timeout(service_test_wait(config, service), recv.read(&mut buf)).await {
+        Ok(Err(error)) => Err(quic_error(error)),
+        Ok(Ok(_)) | Err(_) => Ok(()),
+    }
+}
+
+fn service_test_wait(config: &Config, service: &Service) -> Duration {
+    Duration::from_secs(
+        service
+            .dial_timeout_secs()
+            .unwrap_or(config.defaults.dial_timeout_secs),
+    ) + Duration::from_millis(250)
+}
+
+fn test_source_addr() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 0))
+}
+
+fn service_test_result_json(service: &Service, status: &str, message: &str) -> String {
+    format!(
+        "{{\"status\":\"{}\",\"service\":\"{}\",\"direction\":\"{}\",\"message\":\"{}\"}}\n",
+        status,
+        json_escape(&service.name),
+        direction_label(service.direction),
+        json_escape(message)
+    )
 }
 
 async fn handle_relay_tunnel_socket(
@@ -1495,6 +1628,13 @@ fn direction_label(direction: Direction) -> &'static str {
     match direction {
         Direction::BToA => "b_to_a",
         Direction::AToB => "a_to_b",
+    }
+}
+
+fn route_owner_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::BToA => "relay",
+        Direction::AToB => "agent",
     }
 }
 

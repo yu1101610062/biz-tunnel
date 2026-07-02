@@ -93,6 +93,12 @@ target_from_relay = "10.20.1.30:8080"
         topology.contains("a-order-grpc") && topology.contains("b-platform-http"),
         "unexpected topology services: {topology}"
     );
+    let peer_test =
+        http_post_with_token(admin_port, "/v1/services/test/b-platform-http", None, "").await;
+    assert!(
+        peer_test.contains(r#""status":"skipped""#),
+        "unexpected peer route test: {peer_test}"
+    );
 
     let tunnel = http_get(admin_port, "/v1/tunnel").await;
     assert!(

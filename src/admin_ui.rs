@@ -277,6 +277,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
     .path-label.active { border-color: var(--blue); }
     .path-name { font-weight: 800; }
     .path-endpoints { color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+    .test-result { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .test-result.ok { color: var(--green); }
+    .test-result.failed { color: var(--red); }
+    .test-result.skipped, .test-result.running { color: var(--amber); }
     .inspector { display: grid; grid-template-rows: auto 1fr; }
     .form { display: grid; gap: 10px; }
     .field label {
@@ -463,6 +467,8 @@ const ADMIN_UI: &str = r##"<!doctype html>
             <textarea id="pathNote" placeholder="例如：Agent 上报 Core"></textarea>
           </div>
           <button id="savePath" class="primary">保存路径</button>
+          <button id="testPath" type="button">测试当前路径</button>
+          <div id="pathTestResult" class="test-result"></div>
         </div>
 
         <div id="nodeForm" class="form" hidden>
@@ -499,8 +505,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
     const state = {
       tunnelId: "change-me-tunnel-id",
       relayAddr: "relay.example.local:9443",
+      role: "",
       activeTab: "relay",
       selection: { type: "path", id: "example-forward" },
+      tests: {},
       nodes: [
         { id: "agent-proxy", lane: "a", name: "agent role", address: "agent.example.local", note: "主动连接侧代理节点" },
         { id: "local-client", lane: "a", name: "local client", address: "client.example.local", note: "本地业务客户端" },
@@ -673,8 +681,11 @@ const ADMIN_UI: &str = r##"<!doctype html>
         label.className = `path-label ${state.selection.type === "path" && state.selection.id === path.id ? "active" : ""}`;
         label.style.left = `${Math.max(16, Math.min(box.width - 280, midX - 125))}px`;
         label.style.top = `${Math.max(58, Math.min(box.height - 80, (startY + endY) / 2 - 22))}px`;
+        const test = state.tests[path.id];
+        const testHtml = test ? `<div class="test-result ${esc(test.status)}">${esc(testResultText(test))}</div>` : "";
         label.innerHTML = `<div class="path-name">${esc(path.name)} / ${esc(path.direction)}</div>
-          <div class="path-endpoints">${esc(path.expose)} -> ${esc(path.target)}</div>`;
+          <div class="path-endpoints">${esc(path.expose)} -> ${esc(path.target)}</div>
+          ${testHtml}`;
         $("pathLabels").appendChild(label);
 
         const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -720,6 +731,9 @@ const ADMIN_UI: &str = r##"<!doctype html>
         fillNodeOptions($("pathTo"), path.to);
         $("dirAToB").classList.toggle("active", path.direction === "a_to_b");
         $("dirBToA").classList.toggle("active", path.direction === "b_to_a");
+        const test = state.tests[path.id];
+        $("pathTestResult").textContent = test ? testResultText(test) : localTestHint(path);
+        $("pathTestResult").className = `test-result ${test?.status || ""}`;
       } else {
         const node = selectedNode() || state.nodes[0];
         if (!node) return;
@@ -760,6 +774,35 @@ const ADMIN_UI: &str = r##"<!doctype html>
       if (!path) return;
       path.direction = direction;
       path.color = direction === "b_to_a" ? "green" : "blue";
+      render();
+    }
+
+    function routeOwner(path) {
+      return path.direction === "b_to_a" ? "relay" : "agent";
+    }
+
+    function localTestHint(path) {
+      if (!state.role) return "测试会从当前节点发起";
+      if (state.role === routeOwner(path)) return "测试当前节点入口到对端目标 TCP 端口";
+      return `该路径监听在 ${routeOwner(path)} 侧，请到对应页面测试`;
+    }
+
+    function testResultText(result) {
+      const labels = { ok: "通过", failed: "失败", skipped: "跳过", not_found: "未找到", running: "测试中" };
+      return `${labels[result.status] || result.status}：${result.message || ""}`;
+    }
+
+    async function testSelectedPath() {
+      const path = selectedPath();
+      if (!path) return;
+      const id = path.id;
+      state.tests[id] = { status: "running", message: "正在测试通道联通性" };
+      render();
+      try {
+        state.tests[id] = await api(`/v1/services/test/${encodeURIComponent(path.name)}`, { method: "POST" });
+      } catch (error) {
+        state.tests[id] = { status: "failed", message: error.message };
+      }
       render();
     }
 
@@ -829,6 +872,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
           api("/v1/topology"),
           api("/v1/connections"),
         ]);
+        state.role = health.role || state.role;
         state.tunnelId = tunnel.id || state.tunnelId;
         $("statusChip").textContent = tunnel.agent_connected ? "agent 已连接 relay" : "agent 未连接 relay";
         $("statusChip").classList.toggle("offline", !tunnel.agent_connected);
@@ -928,6 +972,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
     $("validateTop").addEventListener("click", validateTopology);
     $("deleteSelected").addEventListener("click", deleteSelected);
     $("savePath").addEventListener("click", updatePathFromForm);
+    $("testPath").addEventListener("click", testSelectedPath);
     $("saveNode").addEventListener("click", updateNodeFromForm);
     $("dirAToB").addEventListener("click", () => setDirection("a_to_b"));
     $("dirBToA").addEventListener("click", () => setDirection("b_to_a"));
