@@ -118,10 +118,10 @@ target_from_relay = "{b_target}"
         agent_test.contains(r#""status":"ok""#),
         "unexpected agent route test: {agent_test}"
     );
-    let skipped = http_post(relay_admin_port, "/v1/services/test/b-echo").await;
+    let remote_test = http_post(relay_admin_port, "/v1/services/test/b-echo").await;
     assert!(
-        skipped.contains(r#""status":"skipped""#),
-        "unexpected skipped route test: {skipped}"
+        remote_test.contains(r#""status":"ok""#),
+        "unexpected remote route test: {remote_test}"
     );
 
     let b_to_a_reply = round_trip(("127.0.0.1", b_expose_port), b"from-b").await;

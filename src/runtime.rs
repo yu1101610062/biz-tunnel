@@ -31,6 +31,8 @@ const FRAME_DATA: u8 = 4;
 const FRAME_CLOSE: u8 = 5;
 const FRAME_OPEN_ERROR: u8 = 6;
 const FRAME_FIN: u8 = 7;
+const FRAME_TEST_REQUEST: u8 = 8;
+const FRAME_TEST_RESPONSE: u8 = 9;
 const MAX_FRAME_LEN: usize = 1024 * 1024;
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const TUNNEL_WAIT: Duration = Duration::from_secs(3);
@@ -141,6 +143,7 @@ struct SharedState {
     writer: RwLock<Option<mpsc::Sender<Frame>>>,
     quic_connection: RwLock<Option<Connection>>,
     streams: Mutex<HashMap<u64, mpsc::Sender<StreamEvent>>>,
+    service_tests: Mutex<HashMap<u64, mpsc::Sender<String>>>,
     connections: Mutex<HashMap<u64, ConnectionInfo>>,
     service_handles: Mutex<HashMap<String, JoinHandle<()>>>,
     generation: AtomicU64,
@@ -162,6 +165,7 @@ impl SharedState {
             writer: RwLock::new(None),
             quic_connection: RwLock::new(None),
             streams: Mutex::new(HashMap::new()),
+            service_tests: Mutex::new(HashMap::new()),
             connections: Mutex::new(HashMap::new()),
             service_handles: Mutex::new(HashMap::new()),
             generation: AtomicU64::new(1),
@@ -221,6 +225,7 @@ impl SharedState {
         for (_, sender) in streams.drain() {
             let _ = sender.send(StreamEvent::Close).await;
         }
+        self.service_tests.lock().await.clear();
         self.connections.lock().await.clear();
         eprintln!("event=tunnel_disconnected");
     }
@@ -511,6 +516,7 @@ async fn handle_quic_bi_stream(
         .map_err(quic_error)?;
     match kind {
         quic_transport::STREAM_OPEN => handle_quic_open_stream(state, send, recv, payload).await,
+        quic_transport::STREAM_TEST => handle_quic_test_stream(state, send, payload).await,
         other => Err(RuntimeError::Protocol(format!(
             "unexpected QUIC stream type {other}"
         ))),
@@ -725,14 +731,7 @@ async fn service_test_json(state: &Arc<SharedState>, name: &str) -> String {
             .iter()
             .find_map(|config| config.service_by_name(name).cloned())
         {
-            return service_test_result_json(
-                &service,
-                "skipped",
-                &format!(
-                    "该路径监听在 {} 侧，请到对应页面测试",
-                    route_owner_label(service.direction)
-                ),
-            );
+            return remote_service_test_json(state, &config, &service).await;
         }
         return format!(
             "{{\"status\":\"not_found\",\"service\":\"{}\",\"message\":\"未找到路径\"}}\n",
@@ -741,13 +740,16 @@ async fn service_test_json(state: &Arc<SharedState>, name: &str) -> String {
     };
 
     if !should_listen(config.role, service.direction) {
-        return format!(
-            "{{\"status\":\"skipped\",\"service\":\"{}\",\"direction\":\"{}\",\"message\":\"该路径监听在 {} 侧，请到对应页面测试\"}}\n",
-            json_escape(&service.name),
-            direction_label(service.direction),
-            route_owner_label(service.direction)
-        );
+        return remote_service_test_json(state, &config, &service).await;
     }
+    local_service_test_json(state, &config, service).await
+}
+
+async fn local_service_test_json(
+    state: &Arc<SharedState>,
+    config: &Config,
+    service: Service,
+) -> String {
     if !state.wait_for_tunnel().await {
         return service_test_result_json(&service, "failed", "隧道未连接");
     }
@@ -762,6 +764,104 @@ async fn service_test_json(state: &Arc<SharedState>, name: &str) -> String {
         Ok(()) => service_test_result_json(&service, "ok", "已通过隧道拨通对端目标 TCP 端口"),
         Err(error) => service_test_result_json(&service, "failed", &error.to_string()),
     }
+}
+
+async fn remote_service_test_json(
+    state: &Arc<SharedState>,
+    config: &Config,
+    service: &Service,
+) -> String {
+    if !state.wait_for_tunnel().await {
+        return service_test_result_json(service, "failed", "隧道未连接");
+    }
+
+    let result = match config.transport.mode {
+        TransportMode::Quic => remote_quic_service_test(state, config, service).await,
+        TransportMode::Tcp | TransportMode::TlsTcp => {
+            remote_tcp_service_test(state, config, service).await
+        }
+    };
+    match result {
+        Ok(body) => body,
+        Err(error) => service_test_result_json(service, "failed", &error.to_string()),
+    }
+}
+
+async fn requested_service_test_json(state: &Arc<SharedState>, name: &str) -> String {
+    let config = state.config.read().await.clone();
+    let Some(service) = config.service_by_name(name).cloned() else {
+        return format!(
+            "{{\"status\":\"not_found\",\"service\":\"{}\",\"message\":\"未找到路径\"}}\n",
+            json_escape(name)
+        );
+    };
+    if !should_listen(config.role, service.direction) {
+        return service_test_result_json(&service, "skipped", "该路径不监听在当前节点");
+    }
+    local_service_test_json(state, &config, service).await
+}
+
+async fn remote_tcp_service_test(
+    state: &Arc<SharedState>,
+    config: &Config,
+    service: &Service,
+) -> Result<String, RuntimeError> {
+    let request_id = state.allocate_stream_id();
+    let (tx, mut rx) = mpsc::channel(1);
+    state.service_tests.lock().await.insert(request_id, tx);
+    if let Err(error) = state
+        .send_frame(Frame {
+            kind: FRAME_TEST_REQUEST,
+            stream_id: request_id,
+            payload: service.name.as_bytes().to_vec(),
+        })
+        .await
+    {
+        state.service_tests.lock().await.remove(&request_id);
+        return Err(error);
+    }
+
+    match timeout(remote_service_test_wait(config, service), rx.recv()).await {
+        Ok(Some(body)) => Ok(body),
+        Ok(None) => Err(RuntimeError::TunnelUnavailable),
+        Err(_) => {
+            state.service_tests.lock().await.remove(&request_id);
+            Err(RuntimeError::Config("远端测试超时".into()))
+        }
+    }
+}
+
+async fn remote_quic_service_test(
+    state: &Arc<SharedState>,
+    config: &Config,
+    service: &Service,
+) -> Result<String, RuntimeError> {
+    let connection = state.quic_connection.read().await.clone();
+    let Some(connection) = connection else {
+        return Err(RuntimeError::TunnelUnavailable);
+    };
+    let (mut send, mut recv) = connection.open_bi().await.map_err(quic_error)?;
+    quic_transport::write_stream_message(
+        &mut send,
+        quic_transport::STREAM_TEST,
+        service.name.as_bytes(),
+    )
+    .await
+    .map_err(quic_error)?;
+    let _ = send.finish();
+
+    let response = timeout(
+        remote_service_test_wait(config, service),
+        quic_transport::read_stream_message(&mut recv),
+    )
+    .await
+    .map_err(|_| RuntimeError::Config("远端测试超时".into()))?
+    .map_err(quic_error)?;
+    if response.0 != FRAME_TEST_RESPONSE {
+        return Err(RuntimeError::Protocol("unexpected test response".into()));
+    }
+    String::from_utf8(response.1)
+        .map_err(|_| RuntimeError::Protocol("test response must be UTF-8".into()))
 }
 
 async fn test_tcp_service(
@@ -830,6 +930,10 @@ fn service_test_wait(config: &Config, service: &Service) -> Duration {
             .dial_timeout_secs()
             .unwrap_or(config.defaults.dial_timeout_secs),
     ) + Duration::from_millis(250)
+}
+
+fn remote_service_test_wait(config: &Config, service: &Service) -> Duration {
+    service_test_wait(config, service) + Duration::from_secs(1)
 }
 
 fn test_source_addr() -> SocketAddr {
@@ -1028,10 +1132,36 @@ async fn handle_incoming_frame(state: Arc<SharedState>, frame: Frame) -> Result<
             }
             Ok(())
         }
+        FRAME_TEST_REQUEST => {
+            tokio::spawn(handle_test_request(state, frame));
+            Ok(())
+        }
+        FRAME_TEST_RESPONSE => {
+            let body = String::from_utf8(frame.payload)
+                .map_err(|_| RuntimeError::Protocol("test response must be UTF-8".into()))?;
+            if let Some(sender) = state.service_tests.lock().await.remove(&frame.stream_id) {
+                let _ = sender.send(body).await;
+            }
+            Ok(())
+        }
         other => Err(RuntimeError::Protocol(format!(
             "unknown frame type {other}"
         ))),
     }
+}
+
+async fn handle_test_request(state: Arc<SharedState>, frame: Frame) {
+    let body = match String::from_utf8(frame.payload) {
+        Ok(name) => requested_service_test_json(&state, &name).await,
+        Err(_) => "{\"status\":\"failed\",\"message\":\"测试请求必须是 UTF-8\"}\n".to_string(),
+    };
+    let _ = state
+        .send_frame(Frame {
+            kind: FRAME_TEST_RESPONSE,
+            stream_id: frame.stream_id,
+            payload: body.into_bytes(),
+        })
+        .await;
 }
 
 async fn handle_open_frame(state: Arc<SharedState>, frame: Frame) -> Result<(), RuntimeError> {
@@ -1111,6 +1241,21 @@ async fn handle_open_frame(state: Arc<SharedState>, frame: Frame) -> Result<(), 
                 .await?;
         }
     }
+    Ok(())
+}
+
+async fn handle_quic_test_stream(
+    state: Arc<SharedState>,
+    mut send: SendStream,
+    payload: Vec<u8>,
+) -> Result<(), RuntimeError> {
+    let name = String::from_utf8(payload)
+        .map_err(|_| RuntimeError::Protocol("test request must be UTF-8".into()))?;
+    let body = requested_service_test_json(&state, &name).await;
+    quic_transport::write_stream_message(&mut send, FRAME_TEST_RESPONSE, body.as_bytes())
+        .await
+        .map_err(quic_error)?;
+    let _ = send.finish();
     Ok(())
 }
 
@@ -1628,13 +1773,6 @@ fn direction_label(direction: Direction) -> &'static str {
     match direction {
         Direction::BToA => "b_to_a",
         Direction::AToB => "a_to_b",
-    }
-}
-
-fn route_owner_label(direction: Direction) -> &'static str {
-    match direction {
-        Direction::BToA => "relay",
-        Direction::AToB => "agent",
     }
 }
 

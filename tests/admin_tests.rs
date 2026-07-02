@@ -96,7 +96,7 @@ target_from_relay = "10.20.1.30:8080"
     let peer_test =
         http_post_with_token(admin_port, "/v1/services/test/b-platform-http", None, "").await;
     assert!(
-        peer_test.contains(r#""status":"skipped""#),
+        peer_test.contains(r#""status":"failed""#),
         "unexpected peer route test: {peer_test}"
     );
 

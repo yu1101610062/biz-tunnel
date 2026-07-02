@@ -22,46 +22,55 @@ async fn quic_token_mode_proxies_both_directions_without_tcp_tunnel_listener() {
     let tunnel_port = free_port();
     let b_expose_port = free_port();
     let a_expose_port = free_port();
+    let relay_admin_port = free_port();
     let dir = tempfile::tempdir().expect("tempdir");
     let certs = write_quic_fixtures(dir.path());
 
     let relay_config_path = dir.path().join("relay.toml");
-    write_config(
-        &relay_config_path,
-        &relay_config(
-            tunnel_port,
-            b_expose_port,
-            a_expose_port,
-            &a_target.to_string(),
-            &b_target.to_string(),
-            &certs,
-            r#"
+    let relay_body = relay_config(
+        tunnel_port,
+        b_expose_port,
+        a_expose_port,
+        &a_target.to_string(),
+        &b_target.to_string(),
+        &certs,
+        r#"
 [security]
 mode = "token"
 cert = "__SERVER_CERT__"
 key = "__SERVER_KEY__"
 "#,
-        ),
+    )
+    .replace(
+        "listen = \"127.0.0.1:0\"",
+        &format!("listen = \"127.0.0.1:{relay_admin_port}\""),
+    )
+    .replace(
+        "[[b_to_a]]",
+        "[defaults]\ndial_timeout_secs = 1\n\n[[b_to_a]]",
     );
+    write_config(&relay_config_path, &relay_body);
 
     let agent_config_path = dir.path().join("agent.toml");
-    write_config(
-        &agent_config_path,
-        &agent_config(
-            tunnel_port,
-            b_expose_port,
-            a_expose_port,
-            &a_target.to_string(),
-            &b_target.to_string(),
-            &certs,
-            r#"
+    let agent_body = agent_config(
+        tunnel_port,
+        b_expose_port,
+        a_expose_port,
+        &a_target.to_string(),
+        &b_target.to_string(),
+        &certs,
+        r#"
 [security]
 mode = "token"
 ca_cert = "__CA_CERT__"
 server_name = "localhost"
 "#,
-        ),
+    )
+    .replace(
+        "[[b_to_a]]",
+        "[defaults]\ndial_timeout_secs = 1\n\n[[b_to_a]]",
     );
+    write_config(&agent_config_path, &agent_body);
 
     let relay = Runtime::spawn(Config::load(&relay_config_path).expect("relay config"))
         .await
@@ -74,6 +83,13 @@ server_name = "localhost"
     wait_connected(&relay).await;
     wait_for_tcp(("127.0.0.1", b_expose_port)).await;
     wait_for_tcp(("127.0.0.1", a_expose_port)).await;
+    wait_for_tcp(("127.0.0.1", relay_admin_port)).await;
+
+    let remote_test = http_post(relay_admin_port, "/v1/services/test/b-echo").await;
+    assert!(
+        remote_test.contains(r#""status":"ok""#),
+        "unexpected remote QUIC route test: {remote_test}"
+    );
 
     let b_to_a_reply = round_trip(("127.0.0.1", b_expose_port), b"from-b").await;
     assert_eq!(b_to_a_reply, b"a:from-b");
@@ -464,6 +480,25 @@ async fn round_trip(addr: (&str, u16), payload: &[u8]) -> Vec<u8> {
     })
     .await
     .expect("round trip should complete")
+}
+
+async fn http_post(port: u16, path: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect admin");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
 }
 
 async fn wait_connected(runtime: &Runtime) {
