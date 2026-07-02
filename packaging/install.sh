@@ -10,7 +10,7 @@ cert_source_dir="${CERT_SOURCE_DIR:-${asset_dir}/certs}"
 binary="${BINARY:-${asset_dir}/biz-tunnel}"
 relay_config_source="${RELAY_CONFIG:-${asset_dir}/relay.toml}"
 agent_config_source="${AGENT_CONFIG:-${asset_dir}/agent.toml}"
-role="${ROLE:-}"
+role="${1:-${ROLE:-}}"
 overwrite_config="${OVERWRITE_CONFIG:-0}"
 nologin_shell="/bin/false"
 
@@ -26,21 +26,18 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-if ! getent group biz-tunnel >/dev/null; then
-  groupadd --system biz-tunnel
-fi
-
-if ! id -u biz-tunnel >/dev/null 2>&1; then
-  useradd --system --gid biz-tunnel --home-dir /nonexistent --shell "${nologin_shell}" biz-tunnel
+if [[ "$#" -gt 1 ]]; then
+  echo "usage: ./install.sh [relay|agent]" >&2
+  exit 1
 fi
 
 if [[ -z "${role}" ]]; then
-  if [[ ! -t 0 ]]; then
-    echo "set ROLE=relay or ROLE=agent when running non-interactively" >&2
+  if [[ ! -r /dev/tty ]]; then
+    echo "usage: ./install.sh relay|agent" >&2
     exit 1
   fi
   while [[ "${role}" != "relay" && "${role}" != "agent" ]]; do
-    read -r -p "Select node role [relay/agent]: " role
+    read -r -p "Select node role [relay/agent]: " role </dev/tty
   done
 fi
 
@@ -64,6 +61,14 @@ case "${role}" in
     exit 1
     ;;
 esac
+
+if ! getent group biz-tunnel >/dev/null; then
+  groupadd --system biz-tunnel
+fi
+
+if ! id -u biz-tunnel >/dev/null 2>&1; then
+  useradd --system --gid biz-tunnel --home-dir /nonexistent --shell "${nologin_shell}" biz-tunnel
+fi
 
 if [[ ! -x "${binary}" ]]; then
   echo "missing executable binary: ${binary}" >&2
