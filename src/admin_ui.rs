@@ -659,16 +659,25 @@ const ADMIN_UI: &str = r##"<!doctype html>
       svg.innerHTML = "";
       $("pathLabels").innerHTML = "";
 
+      const linkGroups = new Map();
+      for (const path of state.paths) {
+        const key = [path.from, path.to].sort().join("|");
+        if (!linkGroups.has(key)) linkGroups.set(key, []);
+        linkGroups.get(key).push(path.id);
+      }
+
       for (const path of state.paths) {
         const fromEl = canvas.querySelector(`[data-node="${path.from}"]`);
         const toEl = canvas.querySelector(`[data-node="${path.to}"]`);
         if (!fromEl || !toEl) continue;
         const a = fromEl.getBoundingClientRect();
         const b = toEl.getBoundingClientRect();
+        const group = linkGroups.get([path.from, path.to].sort().join("|")) || [path.id];
+        const offset = (group.indexOf(path.id) - (group.length - 1) / 2) * 28;
         const startX = a.left < b.left ? a.right - box.left : a.left - box.left;
-        const startY = a.top + a.height / 2 - box.top;
+        const startY = a.top + a.height / 2 - box.top + offset;
         const endX = a.left < b.left ? b.left - box.left : b.right - box.left;
-        const endY = b.top + b.height / 2 - box.top;
+        const endY = b.top + b.height / 2 - box.top + offset;
         const midX = (startX + endX) / 2;
         const d = `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
         const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
