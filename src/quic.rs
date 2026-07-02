@@ -1,6 +1,9 @@
-use std::{error::Error, net::SocketAddr, sync::Arc};
+use std::{error::Error, net::SocketAddr, sync::Arc, time::Duration};
 
-use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, VarInt};
+use quinn::{
+    ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, ServerConfig,
+    TransportConfig, VarInt,
+};
 use rustls::{RootCertStore, pki_types::CertificateDer, server::WebPkiClientVerifier};
 
 use crate::{
@@ -123,9 +126,7 @@ fn server_config(config: &Config) -> QuicResult<ServerConfig> {
     let mut server_config = ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls)?,
     ));
-    if let Some(transport) = Arc::get_mut(&mut server_config.transport) {
-        transport.max_concurrent_uni_streams(0_u8.into());
-    }
+    server_config.transport_config(transport_config(config));
     Ok(server_config)
 }
 
@@ -158,9 +159,21 @@ fn client_config(config: &Config) -> QuicResult<ClientConfig> {
     };
     tls.alpn_protocols = vec![ALPN.to_vec()];
 
-    Ok(ClientConfig::new(Arc::new(
+    let mut client_config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(tls)?,
-    )))
+    ));
+    client_config.transport_config(transport_config(config));
+    Ok(client_config)
+}
+
+fn transport_config(config: &Config) -> Arc<TransportConfig> {
+    let idle = Duration::from_secs(config.transport.idle_timeout_secs);
+    let keep_alive = Duration::from_secs((config.transport.idle_timeout_secs / 2).max(5));
+    let mut transport = TransportConfig::default();
+    transport.max_idle_timeout(IdleTimeout::try_from(idle).ok());
+    transport.keep_alive_interval(Some(keep_alive));
+    transport.max_concurrent_uni_streams(0_u8.into());
+    Arc::new(transport)
 }
 
 fn peer_certificate_fingerprint(connection: &Connection) -> Option<String> {

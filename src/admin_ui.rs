@@ -548,6 +548,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
       return `${prefix}-${Math.random().toString(16).slice(2, 8)}`;
     }
 
+    function routeId(name) {
+      return `route-${String(name).replace(/[^a-z0-9_-]/gi, "-")}`;
+    }
+
     function selectedNode() {
       return state.nodes.find((node) => node.id === state.selection.id);
     }
@@ -953,15 +957,33 @@ const ADMIN_UI: &str = r##"<!doctype html>
     }
 
     function syncRuntimeServices(services) {
+      const nodes = state.nodes.filter((node) => node.id === "agent-proxy" || node.id === "relay-proxy");
       state.paths = services.map((service) => {
         const old = state.paths.find((item) => item.name === service.name);
         const direction = service.direction;
+        const id = old?.id || routeId(service.name);
+        const from = `${id}-from`;
+        const to = `${id}-to`;
+        nodes.push({
+          id: from,
+          lane: direction === "a_to_b" ? "a" : "b",
+          name: `${service.name} 入口`,
+          address: service.expose,
+          note: direction === "a_to_b" ? "主动侧本地监听" : "被连接侧本地监听",
+        });
+        nodes.push({
+          id: to,
+          lane: direction === "a_to_b" ? "b" : "a",
+          name: `${service.name} 目标`,
+          address: service.target,
+          note: direction === "a_to_b" ? "被连接侧目标服务" : "主动侧目标服务",
+        });
         return {
-          id: old?.id || `route-${service.name.replace(/[^a-z0-9_-]/gi, "-")}`,
+          id,
           name: service.name,
           direction,
-          from: direction === "a_to_b" ? "agent-proxy" : "relay-proxy",
-          to: direction === "a_to_b" ? "relay-proxy" : "agent-proxy",
+          from,
+          to,
           expose: service.expose,
           target: service.target,
           allowed: (service.allowed_sources || []).join(", "),
@@ -969,6 +991,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
           color: direction === "b_to_a" ? "green" : "blue",
         };
       });
+      state.nodes = nodes;
       if (!state.paths.some((path) => path.id === state.selection.id)) {
         state.selection = { type: "path", id: state.paths[0]?.id };
       }
