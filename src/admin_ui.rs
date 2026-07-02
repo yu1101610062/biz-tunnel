@@ -823,7 +823,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
         $("statusChip").classList.toggle("offline", !tunnel.agent_connected);
         $("tunnelText").textContent = `${health.role || "node"} · ${state.tunnelId} · ${connections.active_streams || 0} 条活动连接`;
         $("lastRefresh").textContent = new Date().toLocaleTimeString();
-        if (services.services?.length) mergeRuntimeServices(services.services);
+        if (services.services?.length) syncRuntimeServices(services.services);
       } catch {
         $("statusChip").textContent = "管理接口未连接";
         $("statusChip").classList.add("offline");
@@ -831,14 +831,25 @@ const ADMIN_UI: &str = r##"<!doctype html>
       render();
     }
 
-    function mergeRuntimeServices(services) {
-      for (const service of services) {
-        const path = state.paths.find((item) => item.name === service.name);
-        if (!path) continue;
-        path.direction = service.direction;
-        path.expose = service.expose;
-        path.target = service.target;
-        path.allowed = (service.allowed_sources || []).join(", ");
+    function syncRuntimeServices(services) {
+      state.paths = services.map((service) => {
+        const old = state.paths.find((item) => item.name === service.name);
+        const direction = service.direction;
+        return {
+          id: old?.id || `route-${service.name.replace(/[^a-z0-9_-]/gi, "-")}`,
+          name: service.name,
+          direction,
+          from: direction === "a_to_b" ? "agent-proxy" : "relay-proxy",
+          to: direction === "a_to_b" ? "relay-proxy" : "agent-proxy",
+          expose: service.expose,
+          target: service.target,
+          allowed: (service.allowed_sources || []).join(", "),
+          note: old?.note || "来自运行配置",
+          color: direction === "b_to_a" ? "green" : "blue",
+        };
+      });
+      if (!state.paths.some((path) => path.id === state.selection.id)) {
+        state.selection = { type: "path", id: state.paths[0]?.id };
       }
     }
 
