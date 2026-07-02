@@ -12,6 +12,14 @@ relay_config_source="${RELAY_CONFIG:-${asset_dir}/relay.toml}"
 agent_config_source="${AGENT_CONFIG:-${asset_dir}/agent.toml}"
 role="${ROLE:-}"
 overwrite_config="${OVERWRITE_CONFIG:-0}"
+nologin_shell="/bin/false"
+
+for shell in /usr/sbin/nologin /sbin/nologin /usr/bin/nologin; do
+  if [[ -x "${shell}" ]]; then
+    nologin_shell="${shell}"
+    break
+  fi
+done
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "install.sh must run as root" >&2
@@ -23,7 +31,7 @@ if ! getent group biz-tunnel >/dev/null; then
 fi
 
 if ! id -u biz-tunnel >/dev/null 2>&1; then
-  useradd --system --gid biz-tunnel --home-dir /nonexistent --shell /usr/bin/nologin biz-tunnel
+  useradd --system --gid biz-tunnel --home-dir /nonexistent --shell "${nologin_shell}" biz-tunnel
 fi
 
 if [[ -z "${role}" ]]; then
