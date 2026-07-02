@@ -2082,7 +2082,7 @@ async fn write_http(
     body: &str,
 ) -> Result<(), RuntimeError> {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     socket.write_all(response.as_bytes()).await?;

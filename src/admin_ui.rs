@@ -355,7 +355,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
   <header>
     <div>
       <h1>中继拓扑配置</h1>
-      <div class="muted">在流程图中添加节点、连接通讯路径并生成两端配置</div>
+      <div class="muted">在流程图中添加节点、连接通讯路径并生成两端配置 · ui-route-nodes-20260702</div>
     </div>
     <div class="toolbar">
       <span id="statusChip" class="status-chip offline">agent 未连接 relay</span>
