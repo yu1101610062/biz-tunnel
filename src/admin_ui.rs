@@ -243,9 +243,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
     svg.links {
       position: absolute;
       inset: 0;
-      pointer-events: none;
+      pointer-events: auto;
       z-index: 1;
     }
+    svg.links path:not(.path-hit) { pointer-events: none; }
     .path-hit {
       pointer-events: stroke;
       cursor: pointer;
@@ -266,6 +267,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
       transition: opacity .12s ease, transform .12s ease;
     }
     .path-label.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .canvas:has(.path-hit:hover) .path-label {
       opacity: 1;
       transform: translateY(0);
     }
@@ -336,7 +341,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
       .canvas { min-height: 720px; overflow: auto; }
       .lane { position: relative; inset: auto; width: auto; margin: 14px; min-height: 280px; }
       .hint { position: static; transform: none; margin: 0 14px 14px; }
-      .path-label { position: relative; left: auto !important; top: auto !important; margin: 8px 14px; max-width: none; }
+      .path-label { position: relative; left: auto !important; top: auto !important; margin: 8px 14px; max-width: none; opacity: 1; transform: none; }
       svg.links { display: none; }
       .canvas-panel { grid-template-rows: auto auto auto; }
     }
@@ -676,11 +681,17 @@ const ADMIN_UI: &str = r##"<!doctype html>
         hit.setAttribute("class", "path-hit");
         hit.setAttribute("d", d);
         hit.setAttribute("fill", "none");
-        hit.setAttribute("stroke", "transparent");
-        hit.setAttribute("stroke-width", "14");
+        hit.setAttribute("stroke", "rgba(37, 99, 235, 0.01)");
+        hit.setAttribute("stroke-width", "18");
         hit.setAttribute("stroke-linecap", "round");
+        hit.addEventListener("pointerenter", () => label.classList.add("visible"));
+        hit.addEventListener("pointerleave", () => label.classList.remove("visible"));
+        hit.addEventListener("pointerover", () => label.classList.add("visible"));
+        hit.addEventListener("pointerout", () => label.classList.remove("visible"));
         hit.addEventListener("mouseenter", () => label.classList.add("visible"));
         hit.addEventListener("mouseleave", () => label.classList.remove("visible"));
+        hit.addEventListener("mouseover", () => label.classList.add("visible"));
+        hit.addEventListener("mouseout", () => label.classList.remove("visible"));
         hit.addEventListener("click", () => select("path", path.id));
         svg.appendChild(hit);
       }
@@ -812,10 +823,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
 
     async function refreshRuntime() {
       try {
-        const [health, tunnel, services, connections] = await Promise.all([
+        const [health, tunnel, topology, connections] = await Promise.all([
           api("/healthz"),
           api("/v1/tunnel"),
-          api("/v1/services"),
+          api("/v1/topology"),
           api("/v1/connections"),
         ]);
         state.tunnelId = tunnel.id || state.tunnelId;
@@ -823,12 +834,41 @@ const ADMIN_UI: &str = r##"<!doctype html>
         $("statusChip").classList.toggle("offline", !tunnel.agent_connected);
         $("tunnelText").textContent = `${health.role || "node"} · ${state.tunnelId} · ${connections.active_streams || 0} 条活动连接`;
         $("lastRefresh").textContent = new Date().toLocaleTimeString();
-        if (services.services?.length) syncRuntimeServices(services.services);
+        syncTopology(topology);
       } catch {
         $("statusChip").textContent = "管理接口未连接";
         $("statusChip").classList.add("offline");
       }
       render();
+    }
+
+    function syncTopology(topology) {
+      const runtimeNodes = (topology.nodes || []).map((node) => {
+        const agent = node.role === "agent";
+        const id = agent ? "agent-proxy" : "relay-proxy";
+        const address = agent
+          ? (node.node_id || node.admin_listen || node.address || "")
+          : (node.address || node.node_id || node.admin_listen || "");
+        const details = [
+          `${agent ? "主动连接侧" : "被连接侧"} · ${node.transport || "tcp"}`,
+          node.node_id ? `node_id: ${node.node_id}` : "",
+          node.address ? `${agent ? "relay_addr" : "listen"}: ${node.address}` : "",
+          node.admin_listen ? `admin: ${node.admin_listen}` : "",
+        ].filter(Boolean);
+        return {
+          id,
+          lane: agent ? "a" : "b",
+          name: agent ? "agent role" : "relay role",
+          address,
+          note: details.join(" / "),
+        };
+      });
+      const hasAgent = runtimeNodes.some((node) => node.id === "agent-proxy");
+      const hasRelay = runtimeNodes.some((node) => node.id === "relay-proxy");
+      if (!hasAgent) runtimeNodes.unshift({ id: "agent-proxy", lane: "a", name: "agent role", address: "agent.example.local", note: "主动连接侧代理节点" });
+      if (!hasRelay) runtimeNodes.push({ id: "relay-proxy", lane: "b", name: "relay role", address: state.relayAddr, note: "被连接侧中继节点" });
+      state.nodes = runtimeNodes;
+      if (topology.services) syncRuntimeServices(topology.services);
     }
 
     function syncRuntimeServices(services) {
@@ -844,7 +884,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
           expose: service.expose,
           target: service.target,
           allowed: (service.allowed_sources || []).join(", "),
-          note: old?.note || "来自运行配置",
+          note: old?.note || "来自合并配置",
           color: direction === "b_to_a" ? "green" : "blue",
         };
       });

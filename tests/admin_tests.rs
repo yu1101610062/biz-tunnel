@@ -11,6 +11,7 @@ use tokio::{
 async fn admin_api_reports_health_services_tunnel_and_metrics() {
     let tunnel_port = free_port();
     let expose_port = free_port();
+    let agent_expose_port = free_port();
     let admin_port = free_port();
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("relay.toml");
@@ -32,6 +33,28 @@ listen = "127.0.0.1:{admin_port}"
 name = "a-order-grpc"
 expose_on_relay = "127.0.0.1:{expose_port}"
 target_from_agent = "10.10.1.20:50051"
+"#
+        ),
+    );
+    write_config(
+        &dir.path().join("agent.toml"),
+        &format!(
+            r#"
+role = "agent"
+
+[tunnel]
+id = "room-a-to-room-b"
+node_id = "agent-test-node"
+relay_addr = "127.0.0.1:{tunnel_port}"
+token = "secret-token"
+
+[admin]
+listen = "127.0.0.1:0"
+
+[[a_to_b]]
+name = "b-platform-http"
+expose_on_agent = "127.0.0.1:{agent_expose_port}"
+target_from_relay = "10.20.1.30:8080"
 "#
         ),
     );
@@ -59,6 +82,16 @@ target_from_agent = "10.10.1.20:50051"
     assert!(
         services.contains("b_to_a"),
         "unexpected services body: {services}"
+    );
+
+    let topology = http_get(admin_port, "/v1/topology").await;
+    assert!(
+        topology.contains(r#""role":"agent""#) && topology.contains(r#""role":"relay""#),
+        "unexpected topology nodes: {topology}"
+    );
+    assert!(
+        topology.contains("a-order-grpc") && topology.contains("b-platform-http"),
+        "unexpected topology services: {topology}"
     );
 
     let tunnel = http_get(admin_port, "/v1/tunnel").await;

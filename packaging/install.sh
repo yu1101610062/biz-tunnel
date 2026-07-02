@@ -8,6 +8,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 asset_dir="${ASSET_DIR:-${script_dir}/assets}"
 cert_source_dir="${CERT_SOURCE_DIR:-${asset_dir}/certs}"
 binary="${BINARY:-${asset_dir}/biz-tunnel}"
+relay_config_source="${RELAY_CONFIG:-${asset_dir}/relay.toml}"
+agent_config_source="${AGENT_CONFIG:-${asset_dir}/agent.toml}"
 role="${ROLE:-}"
 overwrite_config="${OVERWRITE_CONFIG:-0}"
 
@@ -37,7 +39,6 @@ fi
 case "${role}" in
   relay)
     config_path="${config_dir}/relay.toml"
-    config_source="${RELAY_CONFIG:-${asset_dir}/relay.toml}"
     admin_url="http://127.0.0.1:18080"
     unit_requires=""
     unit_wants="network-online.target"
@@ -45,7 +46,6 @@ case "${role}" in
     ;;
   agent)
     config_path="${config_dir}/agent.toml"
-    config_source="${AGENT_CONFIG:-${asset_dir}/agent.toml}"
     admin_url="http://127.0.0.1:18081"
     unit_requires="Requires=sdp-headless.service"
     unit_wants="network-online.target sdp-headless.service"
@@ -62,8 +62,13 @@ if [[ ! -x "${binary}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${config_source}" ]]; then
-  echo "missing embedded ${role} config: ${config_source}" >&2
+if [[ ! -f "${relay_config_source}" ]]; then
+  echo "missing embedded relay config: ${relay_config_source}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${agent_config_source}" ]]; then
+  echo "missing embedded agent config: ${agent_config_source}" >&2
   exit 1
 fi
 
@@ -80,10 +85,16 @@ if [[ -d "${cert_source_dir}" ]]; then
   install -m 0640 -o biz-tunnel -g biz-tunnel "${cert_source_dir}/server.key" "${config_dir}/certs/server.key"
 fi
 
-if [[ ! -f "${config_path}" || "${overwrite_config}" == "1" ]]; then
-  install -m 0640 -o biz-tunnel -g biz-tunnel "${config_source}" "${config_path}"
+if [[ ! -f "${config_dir}/relay.toml" || "${overwrite_config}" == "1" ]]; then
+  install -m 0640 -o biz-tunnel -g biz-tunnel "${relay_config_source}" "${config_dir}/relay.toml"
 else
-  echo "keep existing config: ${config_path}"
+  echo "keep existing config: ${config_dir}/relay.toml"
+fi
+
+if [[ ! -f "${config_dir}/agent.toml" || "${overwrite_config}" == "1" ]]; then
+  install -m 0640 -o biz-tunnel -g biz-tunnel "${agent_config_source}" "${config_dir}/agent.toml"
+else
+  echo "keep existing config: ${config_dir}/agent.toml"
 fi
 
 cat >"${systemd_dir}/biz-tunnel.service" <<EOF

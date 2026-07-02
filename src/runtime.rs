@@ -644,6 +644,10 @@ async fn handle_admin_connection(
             let config = state.config.read().await.clone();
             HttpResponse::json("200 OK", services_json(&config))
         }
+        ("GET", "/v1/topology") => {
+            let config = state.config.read().await.clone();
+            HttpResponse::json("200 OK", topology_json(&config))
+        }
         ("GET", "/v1/tunnel") => {
             let config = state.config.read().await.clone();
             let connected = state.connected.load(Ordering::SeqCst);
@@ -1321,17 +1325,87 @@ fn services_json(config: &Config) -> String {
         if index > 0 {
             body.push(',');
         }
-        body.push_str(&format!(
-            "{{\"name\":\"{}\",\"direction\":\"{}\",\"expose\":\"{}\",\"target\":\"{}\",\"allowed_sources\":{}}}",
-            json_escape(&service.name),
-            direction_label(service.direction),
-            json_escape(service.expose_addr()),
-            json_escape(service.target_addr()),
-            json_string_array(service.allowed_sources())
-        ));
+        body.push_str(&service_json(service));
     }
     body.push_str("]}\n");
     body
+}
+
+fn topology_json(config: &Config) -> String {
+    let configs = topology_configs(config);
+    let mut body = String::from("{\"nodes\":[");
+    for (index, config) in configs.iter().enumerate() {
+        if index > 0 {
+            body.push(',');
+        }
+        let address = match config.role {
+            Role::Relay => config.tunnel.listen.as_deref().unwrap_or_default(),
+            Role::Agent => config.tunnel.relay_addr.as_deref().unwrap_or_default(),
+        };
+        body.push_str(&format!(
+            "{{\"role\":\"{}\",\"node_id\":\"{}\",\"address\":\"{}\",\"admin_listen\":\"{}\",\"transport\":\"{}\"}}",
+            role_label(config.role),
+            json_escape(config.tunnel.node_id.as_deref().unwrap_or_default()),
+            json_escape(address),
+            json_escape(&config.admin.listen),
+            transport_label(config.transport.mode)
+        ));
+    }
+    body.push_str("],\"services\":[");
+    let mut seen = Vec::new();
+    let mut first = true;
+    for config in &configs {
+        for service in config.services() {
+            let key = format!("{}:{}", service.name, direction_label(service.direction));
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            if !first {
+                body.push(',');
+            }
+            first = false;
+            body.push_str(&service_json(service));
+        }
+    }
+    body.push_str("]}\n");
+    body
+}
+
+fn topology_configs(config: &Config) -> Vec<Config> {
+    let mut configs = vec![config.clone()];
+    let Some(source_path) = config.source_path() else {
+        return configs;
+    };
+    let Some(config_dir) = source_path.parent() else {
+        return configs;
+    };
+    let peer_file = match config.role {
+        Role::Relay => "agent.toml",
+        Role::Agent => "relay.toml",
+    };
+    let peer_path = config_dir.join(peer_file);
+    if peer_path != source_path && peer_path.exists() {
+        if let Ok(peer) = Config::load(&peer_path) {
+            configs.push(peer);
+        }
+    }
+    configs.sort_by_key(|config| match config.role {
+        Role::Agent => 0,
+        Role::Relay => 1,
+    });
+    configs
+}
+
+fn service_json(service: &Service) -> String {
+    format!(
+        "{{\"name\":\"{}\",\"direction\":\"{}\",\"expose\":\"{}\",\"target\":\"{}\",\"allowed_sources\":{}}}",
+        json_escape(&service.name),
+        direction_label(service.direction),
+        json_escape(service.expose_addr()),
+        json_escape(service.target_addr()),
+        json_string_array(service.allowed_sources())
+    )
 }
 
 fn connections_json(connections: &HashMap<u64, ConnectionInfo>) -> String {
@@ -1421,6 +1495,14 @@ fn direction_label(direction: Direction) -> &'static str {
     match direction {
         Direction::BToA => "b_to_a",
         Direction::AToB => "a_to_b",
+    }
+}
+
+fn transport_label(mode: TransportMode) -> &'static str {
+    match mode {
+        TransportMode::Tcp => "tcp",
+        TransportMode::TlsTcp => "tls_tcp",
+        TransportMode::Quic => "quic",
     }
 }
 
