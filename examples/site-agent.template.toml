@@ -1,0 +1,39 @@
+# Empty agent-side template. Fill site values before installing.
+
+role = "agent"
+
+[tunnel]
+id = "change-me-tunnel-id"
+node_id = "change-me-agent-node"
+relay_addr = "relay.example.local:9443"
+token = "change-me-long-random-token"
+
+[transport]
+mode = "quic"
+fallback = []
+connect_timeout_secs = 10
+idle_timeout_secs = 300
+max_frame_bytes = 1048576
+
+[security]
+mode = "token"
+ca_cert = "/etc/biz-tunnel/certs/ca.pem"
+server_name = "relay.example.local"
+
+[admin]
+listen = "0.0.0.0:18081"
+
+[defaults]
+drain_timeout_secs = 30
+dial_timeout_secs = 5
+
+[[b_to_a]]
+name = "replace-with-reverse-route"
+expose_on_relay = "0.0.0.0:0"
+target_from_agent = "127.0.0.1:0"
+
+[[a_to_b]]
+name = "replace-with-forward-route"
+expose_on_agent = "0.0.0.0:0"
+target_from_relay = "127.0.0.1:0"
+allowed_sources = []

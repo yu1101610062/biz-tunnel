@@ -7,11 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{
-    certs,
-    config::{Config, Role},
-    runtime::Runtime,
-};
+use crate::{certs, config::Config, runtime::Runtime};
 
 pub fn config_path_from_args<I>(args: I) -> Result<PathBuf, CliError>
 where
@@ -32,16 +28,18 @@ where
     Err(CliError::MissingConfigPath)
 }
 
-pub async fn run(expected_role: Role) -> Result<(), Box<dyn Error>> {
-    let path = config_path_from_args(env::args())?;
-    let config = Config::load(&path)?;
-    if config.role != expected_role {
-        return Err(format!(
-            "config role is {:?}, but this binary expects {:?}",
-            config.role, expected_role
-        )
-        .into());
+pub async fn run() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| matches_ctl_command(arg.as_str()))
+    {
+        execute_ctl_command(ctl_command_from_args(args)?)?;
+        return Ok(());
     }
+
+    let path = config_path_from_args(args)?;
+    let config = Config::load(&path)?;
 
     let runtime = Runtime::spawn(config).await?;
     tokio::signal::ctrl_c().await?;
@@ -49,10 +47,11 @@ pub async fn run(expected_role: Role) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub async fn run_ctl() -> Result<(), Box<dyn Error>> {
-    let command = ctl_command_from_args(env::args())?;
-    execute_ctl_command(command)?;
-    Ok(())
+fn matches_ctl_command(command: &str) -> bool {
+    matches!(
+        command,
+        "check-config" | "gen-token" | "reload" | "cert-fingerprint"
+    )
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -229,12 +228,12 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CliError::MissingConfigPath | CliError::Help => {
-                write!(f, "usage: biz-relay|biz-agent --config <path>")
+                write!(f, "usage: biz-tunnel --config <path>")
             }
             CliError::MissingCtlCommand => {
                 write!(
                     f,
-                    "usage: biz-tunnelctl <check-config|gen-token|reload|cert-fingerprint>"
+                    "usage: biz-tunnel <check-config|gen-token|reload|cert-fingerprint>"
                 )
             }
             CliError::MissingValue(name) => write!(f, "missing value for {name}"),

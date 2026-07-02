@@ -12,7 +12,7 @@ A -> B:
 A business client -> A agent exposed port -> tunnel -> B relay -> B target service
 ```
 
-The A-side `biz-agent` always dials the B-side `biz-relay`. Business applications are changed to use the local-side exposed address. No router, switch, TUN, TProxy, or source-IP preservation is required.
+The A-side agent role always dials the B-side relay role. The packaged default tunnel transport is QUIC over UDP. Business applications are changed to use the local-side exposed address. No router, switch, TUN, TProxy, or source-IP preservation is required.
 
 ## Build
 
@@ -20,27 +20,25 @@ The A-side `biz-agent` always dials the B-side `biz-relay`. Business application
 cargo build --release
 ```
 
-The binaries are:
+The binary is:
 
-- `target/release/biz-relay`
-- `target/release/biz-agent`
-- `target/release/biz-tunnelctl`
+- `target/release/biz-tunnel`
 
 ## Run
 
 B-side relay:
 
 ```bash
-biz-relay --config /etc/biz-tunnel/relay.toml
+biz-tunnel --config /etc/biz-tunnel/relay.toml
 ```
 
 A-side edge agent:
 
 ```bash
-biz-agent --config /etc/biz-tunnel/agent.toml
+biz-tunnel --config /etc/biz-tunnel/agent.toml
 ```
 
-Both config files must use the same `tunnel.id` and `tunnel.token`.
+The process role comes from the config file `role` value. Both config files must use the same `tunnel.id` and `tunnel.token`.
 For file-based secrets, set `[security].token_file` and omit `[tunnel].token`.
 
 ## Configuration
@@ -49,6 +47,8 @@ See:
 
 - `examples/relay.toml`
 - `examples/agent.toml`
+- `examples/site-relay.template.toml`
+- `examples/site-agent.template.toml`
 
 Direction rules:
 
@@ -76,6 +76,7 @@ QUIC mTLS mode requires `security.ca_cert`, `security.cert`, `security.key`, and
 
 Each process exposes an HTTP API on `[admin].listen`:
 
+- `GET /` or `GET /ui`
 - `GET /healthz`
 - `GET /readyz`
 - `GET /v1/services`
@@ -91,22 +92,28 @@ If `[admin].token_file` is configured, every management endpoint except health/r
 Authorization: Bearer <token>
 ```
 
+Requests from `127.0.0.1` or `::1` bypass admin token checks so local automation can reload or inspect the process without storing a management secret.
+
 `POST /v1/services/reload` reloads the original config file, diffs services by name, starts newly added listeners, stops removed listeners, and applies target/source-list changes to new connections. Changes to `role`, `tunnel.id`, tunnel listen/dial address, admin listen address, transport, or security require a process restart.
 
 ## Control Tool
 
 ```bash
-biz-tunnelctl check-config --config /etc/biz-tunnel/relay.toml
-biz-tunnelctl gen-token --out /etc/biz-tunnel/token
-biz-tunnelctl cert-fingerprint --cert /etc/biz-tunnel/certs/server.pem
-biz-tunnelctl reload --admin http://127.0.0.1:18080 --token-file /etc/biz-tunnel/admin-token
+biz-tunnel check-config --config /etc/biz-tunnel/relay.toml
+biz-tunnel gen-token --out /etc/biz-tunnel/token
+biz-tunnel cert-fingerprint --cert /etc/biz-tunnel/certs/server.pem
+biz-tunnel reload --admin http://127.0.0.1:18080 --token-file /etc/biz-tunnel/admin-token
 ```
 
 Install helper:
 
 ```bash
-sudo packaging/install.sh
+sudo ./install.sh
+# non-interactive:
+sudo ROLE=relay ./install.sh
 ```
+
+The packaged installer carries the binary and default configs under `assets/`. It asks for `relay` or `agent`, installs `/etc/biz-tunnel/{relay,agent}.toml`, writes `/etc/biz-tunnel/service.env`, and installs one `biz-tunnel.service`. The `agent` service depends on `sdp-headless.service`.
 
 ## Current Scope
 
@@ -126,7 +133,7 @@ Supported:
 - Admin bearer-token protection
 - Hot reload for service additions/removals/target changes
 - Connection registry and per-service Prometheus metrics
-- `biz-tunnelctl` check-config, gen-token, cert-fingerprint, and reload
+- Built-in check-config, gen-token, cert-fingerprint, and reload commands
 
 Not supported in this build:
 

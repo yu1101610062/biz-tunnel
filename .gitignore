@@ -1,7 +1,9 @@
 /target/
+/dist/
 /.analysis/
 /.agents/
 /.codex/
+/examples/certs/
 
 *.deb
 *.log

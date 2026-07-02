@@ -77,7 +77,7 @@ target_from_agent = "10.10.1.20:50051"
 }
 
 #[tokio::test]
-async fn admin_api_requires_token_for_management_and_reloads_services() {
+async fn admin_api_allows_loopback_without_token_and_reloads_services() {
     let tunnel_port = free_port();
     let expose_port = free_port();
     let admin_port = free_port();
@@ -109,10 +109,16 @@ token_file = "{}"
         .expect("runtime starts");
     wait_for_tcp(("127.0.0.1", admin_port)).await;
 
-    let unauthorized = http_get(admin_port, "/v1/services").await;
+    let loopback = http_get(admin_port, "/v1/services").await;
     assert!(
-        unauthorized.contains("401 Unauthorized"),
-        "unexpected unauthorized response: {unauthorized}"
+        loopback.contains("200 OK"),
+        "unexpected loopback response: {loopback}"
+    );
+
+    let ui = http_get(admin_port, "/ui").await;
+    assert!(
+        ui.contains("200 OK") && ui.contains("中继拓扑配置"),
+        "unexpected ui response: {ui}"
     );
 
     let authorized = http_get_with_token(admin_port, "/v1/services", Some("admin-secret")).await;
@@ -145,8 +151,7 @@ target_from_agent = "127.0.0.1:9"
         ),
     );
 
-    let reload =
-        http_post_with_token(admin_port, "/v1/services/reload", Some("admin-secret"), "").await;
+    let reload = http_post_with_token(admin_port, "/v1/services/reload", None, "").await;
     assert!(
         reload.contains("200 OK") && reload.contains(r#""status":"applied""#),
         "unexpected reload response: {reload}"

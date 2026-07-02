@@ -19,6 +19,7 @@ use tokio::{
 };
 
 use crate::{
+    admin_ui,
     config::{Config, Direction, Role, Service, TransportMode},
     quic as quic_transport,
 };
@@ -579,12 +580,12 @@ fn spawn_expose_loop(
 fn spawn_admin_loop(state: Arc<SharedState>, listener: TcpListener) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let Ok((socket, _)) = listener.accept().await else {
+            let Ok((socket, peer)) = listener.accept().await else {
                 break;
             };
             let state = state.clone();
             tokio::spawn(async move {
-                if let Err(error) = handle_admin_connection(state, socket).await {
+                if let Err(error) = handle_admin_connection(state, socket, peer).await {
                     eprintln!("event=admin_connection_closed error={error}");
                 }
             });
@@ -595,6 +596,7 @@ fn spawn_admin_loop(state: Arc<SharedState>, listener: TcpListener) -> JoinHandl
 async fn handle_admin_connection(
     state: Arc<SharedState>,
     mut socket: TcpStream,
+    peer: SocketAddr,
 ) -> Result<(), RuntimeError> {
     let mut buf = vec![0_u8; 8192];
     let n = socket.read(&mut buf).await?;
@@ -606,7 +608,7 @@ async fn handle_admin_connection(
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or_default();
-    let health_path = matches!(path, "/healthz" | "/readyz");
+    let public_path = matches!(path, "/healthz" | "/readyz" | "/" | "/ui");
     let admin_token = state
         .config
         .read()
@@ -614,7 +616,7 @@ async fn handle_admin_connection(
         .admin_token()
         .map(ToString::to_string);
 
-    if !health_path && !admin_authorized(&request, admin_token.as_deref()) {
+    if !public_path && !admin_authorized(&request, admin_token.as_deref(), peer) {
         write_http(
             &mut socket,
             "401 Unauthorized",
@@ -626,6 +628,11 @@ async fn handle_admin_connection(
     }
 
     let response = match (method, path) {
+        ("GET", "/") | ("GET", "/ui") => HttpResponse {
+            status: "200 OK",
+            content_type: "text/html; charset=utf-8",
+            body: admin_ui::html().to_string(),
+        },
         ("GET", "/healthz") | ("GET", "/readyz") => {
             let role = state.config.read().await.role;
             HttpResponse::json(
@@ -1482,7 +1489,10 @@ async fn write_http(
     Ok(())
 }
 
-fn admin_authorized(request: &str, token: Option<&str>) -> bool {
+fn admin_authorized(request: &str, token: Option<&str>, peer: SocketAddr) -> bool {
+    if peer.ip().is_loopback() {
+        return true;
+    }
     let Some(token) = token else {
         return true;
     };
@@ -1493,6 +1503,38 @@ fn admin_authorized(request: &str, token: Option<&str>) -> bool {
         };
         name.eq_ignore_ascii_case("authorization") && value.trim() == expected
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use super::admin_authorized;
+
+    #[test]
+    fn admin_auth_allows_loopback_without_token() {
+        let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, 12345));
+        assert!(admin_authorized(
+            "GET /v1/services HTTP/1.1\r\n\r\n",
+            Some("secret"),
+            peer
+        ));
+    }
+
+    #[test]
+    fn admin_auth_requires_token_for_non_loopback() {
+        let peer = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 10), 12345));
+        assert!(!admin_authorized(
+            "GET /v1/services HTTP/1.1\r\n\r\n",
+            Some("secret"),
+            peer
+        ));
+        assert!(admin_authorized(
+            "GET /v1/services HTTP/1.1\r\nAuthorization: Bearer secret\r\n\r\n",
+            Some("secret"),
+            peer
+        ));
+    }
 }
 
 fn listen_services(role: Role, services: &[Service]) -> Vec<Service> {

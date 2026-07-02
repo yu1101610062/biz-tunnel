@@ -6,7 +6,7 @@ use biz_tunnel::cli::{
 #[test]
 fn parses_config_path_flag() {
     let args = vec![
-        "biz-relay".to_string(),
+        "biz-tunnel".to_string(),
         "--config".to_string(),
         "/etc/biz-tunnel/relay.toml".to_string(),
     ];
@@ -18,7 +18,7 @@ fn parses_config_path_flag() {
 
 #[test]
 fn rejects_missing_config_path() {
-    let args = vec!["biz-agent".to_string()];
+    let args = vec!["biz-tunnel".to_string()];
 
     let err = config_path_from_args(args).expect_err("missing config should fail");
 
@@ -31,7 +31,7 @@ fn rejects_missing_config_path() {
 #[test]
 fn parses_ctl_check_config_command() {
     let args = vec![
-        "biz-tunnelctl".to_string(),
+        "biz-tunnel".to_string(),
         "check-config".to_string(),
         "--config".to_string(),
         "/etc/biz-tunnel/relay.toml".to_string(),
@@ -58,7 +58,7 @@ fn generates_url_safe_token() {
 #[test]
 fn parses_ctl_cert_fingerprint_command() {
     let args = vec![
-        "biz-tunnelctl".to_string(),
+        "biz-tunnel".to_string(),
         "cert-fingerprint".to_string(),
         "--cert".to_string(),
         "tests/fixtures/quic/server.pem".to_string(),

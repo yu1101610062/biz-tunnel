@@ -1,3 +1,4 @@
+mod admin_ui;
 pub mod certs;
 pub mod cli;
 pub mod config;
