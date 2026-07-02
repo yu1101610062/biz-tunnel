@@ -399,11 +399,11 @@ const ADMIN_UI: &str = r##"<!doctype html>
       <div id="canvas" class="canvas">
         <svg id="links" class="links"></svg>
         <div class="lane a">
-          <div class="lane-title">room-a（主动连接侧）</div>
+          <div class="lane-title">romm-zg（主动连接侧）</div>
           <div id="laneA"></div>
         </div>
         <div class="lane b">
-          <div class="lane-title">room-b（被连接侧）</div>
+          <div class="lane-title">room-kg（被连接侧）</div>
           <div id="laneB"></div>
         </div>
         <div id="pathLabels"></div>
@@ -414,10 +414,12 @@ const ADMIN_UI: &str = r##"<!doctype html>
           <button data-tab="relay" class="active">relay.toml <span id="relayCount">0</span> 条路径</button>
           <button data-tab="agent">agent.toml <span id="agentCount">0</span> 条路径</button>
           <button id="copyConfig" class="subtle">复制当前配置</button>
+          <button id="saveConfig" class="primary">保存并同步配置</button>
         </div>
         <pre id="configPreview"></pre>
         <div class="chips">
           <span class="chip" id="checkConfig">配置待校验</span>
+          <span class="chip" id="saveConfigResult">尚未保存</span>
           <span class="chip">端口 80 可监听</span>
           <span class="chip">本机管理免授权</span>
         </div>
@@ -483,8 +485,8 @@ const ADMIN_UI: &str = r##"<!doctype html>
           <div class="field">
             <label>所属机房</label>
             <select id="nodeLane">
-              <option value="a">room-a（主动连接侧）</option>
-              <option value="b">room-b（被连接侧）</option>
+              <option value="a">romm-zg（主动连接侧）</option>
+              <option value="b">room-kg（被连接侧）</option>
             </select>
           </div>
           <div class="field">
@@ -830,6 +832,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
       return lines.join("\n");
     }
 
+    function routesToml() {
+      return `${state.paths.map(routeToml).join("\n\n")}\n`;
+    }
+
     function configFor(role) {
       const relay = role === "relay";
       const header = relay
@@ -839,7 +845,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
         ? `[security]\nmode = "token"\ncert = "/etc/biz-tunnel/certs/server.pem"\nkey = "/etc/biz-tunnel/certs/server.key"`
         : `[security]\nmode = "token"\nca_cert = "/etc/biz-tunnel/certs/ca.pem"\nserver_name = "relay.example.local"`;
       const common = `\n\n[transport]\nmode = "quic"\nfallback = []\nconnect_timeout_secs = 10\nidle_timeout_secs = 300\nmax_frame_bytes = 1048576\n\n${security}\n\n[admin]\nlisten = "${relay ? "0.0.0.0:18080" : "0.0.0.0:18081"}"\n\n[defaults]\ndrain_timeout_secs = 30\ndial_timeout_secs = 5`;
-      return `${header}${common}\n\n${state.paths.map(routeToml).join("\n\n")}\n`;
+      return `${header}${common}\n\n${routesToml()}`;
     }
 
     function renderOutput() {
@@ -862,6 +868,28 @@ const ADMIN_UI: &str = r##"<!doctype html>
       $("checkConfig").style.background = errors.length ? "#fff1f0" : "#edf9f2";
       $("checkConfig").style.color = errors.length ? "var(--red)" : "var(--green)";
       if (errors.length) alert(errors.join("\n"));
+    }
+
+    async function saveConfig() {
+      if (state.selection.type === "path") updatePathFromForm();
+      $("saveConfigResult").textContent = "正在保存";
+      $("saveConfigResult").style.background = "#fff8eb";
+      $("saveConfigResult").style.color = "var(--amber)";
+      try {
+        const result = await api("/v1/configs/save", {
+          method: "POST",
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+          body: routesToml(),
+        });
+        $("saveConfigResult").textContent = result.message || result.status;
+        $("saveConfigResult").style.background = result.status === "saved" ? "#edf9f2" : "#fff1f0";
+        $("saveConfigResult").style.color = result.status === "saved" ? "var(--green)" : "var(--red)";
+        refreshRuntime();
+      } catch (error) {
+        $("saveConfigResult").textContent = error.message;
+        $("saveConfigResult").style.background = "#fff1f0";
+        $("saveConfigResult").style.color = "var(--red)";
+      }
     }
 
     async function refreshRuntime() {
@@ -988,6 +1016,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
     $("nodeLane").addEventListener("change", updateNodeFromForm);
     $("nodeNote").addEventListener("change", updateNodeFromForm);
     $("copyConfig").addEventListener("click", () => navigator.clipboard?.writeText(configFor(state.activeTab)));
+    $("saveConfig").addEventListener("click", saveConfig);
     $("saveToken").addEventListener("click", () => sessionStorage.setItem("bizTunnelAdminToken", tokenInput.value.trim()));
     $("importJson").addEventListener("click", importJson);
     $("exportJson").addEventListener("click", exportJson);

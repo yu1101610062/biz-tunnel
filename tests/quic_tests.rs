@@ -97,6 +97,38 @@ server_name = "localhost"
     let a_to_b_reply = round_trip(("127.0.0.1", a_expose_port), b"from-a").await;
     assert_eq!(a_to_b_reply, b"b:from-a");
 
+    let changed_target = "127.0.0.1:9";
+    let routes = format!(
+        r#"
+[[b_to_a]]
+name = "a-echo"
+expose_on_relay = "127.0.0.1:{b_expose_port}"
+target_from_agent = "{changed_target}"
+
+[[a_to_b]]
+name = "b-echo"
+expose_on_agent = "127.0.0.1:{a_expose_port}"
+target_from_relay = "{b_target}"
+"#
+    );
+    let save = http_post_body(relay_admin_port, "/v1/configs/save", &routes).await;
+    assert!(
+        save.contains(r#""status":"saved""#),
+        "unexpected QUIC save response: {save}"
+    );
+    assert!(
+        fs::read_to_string(&relay_config_path)
+            .expect("read relay config")
+            .contains(changed_target),
+        "relay config should be updated"
+    );
+    assert!(
+        fs::read_to_string(&agent_config_path)
+            .expect("read agent config")
+            .contains(changed_target),
+        "agent config should be updated"
+    );
+
     agent.shutdown().await;
     relay.shutdown().await;
 }
@@ -483,11 +515,16 @@ async fn round_trip(addr: (&str, u16), payload: &[u8]) -> Vec<u8> {
 }
 
 async fn http_post(port: u16, path: &str) -> String {
+    http_post_body(port, path, "").await
+}
+
+async fn http_post_body(port: u16, path: &str, body: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("connect admin");
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
     );
     stream
         .write_all(request.as_bytes())

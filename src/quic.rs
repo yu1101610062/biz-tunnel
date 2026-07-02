@@ -12,6 +12,7 @@ pub(crate) const ALPN: &[u8] = b"biz-tunnel/1";
 pub(crate) const STREAM_CONTROL: u8 = 1;
 pub(crate) const STREAM_OPEN: u8 = 2;
 pub(crate) const STREAM_TEST: u8 = 3;
+pub(crate) const STREAM_CONFIG_SAVE: u8 = 4;
 pub(crate) const CLOSE_CODE: VarInt = VarInt::from_u32(0);
 const MAX_STREAM_MESSAGE_LEN: usize = 1024 * 1024;
 

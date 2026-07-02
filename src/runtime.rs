@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fmt,
+    fmt, fs,
     net::{IpAddr, SocketAddr},
     sync::{
         Arc,
@@ -33,6 +33,8 @@ const FRAME_OPEN_ERROR: u8 = 6;
 const FRAME_FIN: u8 = 7;
 const FRAME_TEST_REQUEST: u8 = 8;
 const FRAME_TEST_RESPONSE: u8 = 9;
+const FRAME_CONFIG_SAVE_REQUEST: u8 = 10;
+const FRAME_CONFIG_SAVE_RESPONSE: u8 = 11;
 const MAX_FRAME_LEN: usize = 1024 * 1024;
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const TUNNEL_WAIT: Duration = Duration::from_secs(3);
@@ -143,7 +145,7 @@ struct SharedState {
     writer: RwLock<Option<mpsc::Sender<Frame>>>,
     quic_connection: RwLock<Option<Connection>>,
     streams: Mutex<HashMap<u64, mpsc::Sender<StreamEvent>>>,
-    service_tests: Mutex<HashMap<u64, mpsc::Sender<String>>>,
+    pending_requests: Mutex<HashMap<u64, mpsc::Sender<String>>>,
     connections: Mutex<HashMap<u64, ConnectionInfo>>,
     service_handles: Mutex<HashMap<String, JoinHandle<()>>>,
     generation: AtomicU64,
@@ -165,7 +167,7 @@ impl SharedState {
             writer: RwLock::new(None),
             quic_connection: RwLock::new(None),
             streams: Mutex::new(HashMap::new()),
-            service_tests: Mutex::new(HashMap::new()),
+            pending_requests: Mutex::new(HashMap::new()),
             connections: Mutex::new(HashMap::new()),
             service_handles: Mutex::new(HashMap::new()),
             generation: AtomicU64::new(1),
@@ -225,7 +227,7 @@ impl SharedState {
         for (_, sender) in streams.drain() {
             let _ = sender.send(StreamEvent::Close).await;
         }
-        self.service_tests.lock().await.clear();
+        self.pending_requests.lock().await.clear();
         self.connections.lock().await.clear();
         eprintln!("event=tunnel_disconnected");
     }
@@ -517,6 +519,9 @@ async fn handle_quic_bi_stream(
     match kind {
         quic_transport::STREAM_OPEN => handle_quic_open_stream(state, send, recv, payload).await,
         quic_transport::STREAM_TEST => handle_quic_test_stream(state, send, payload).await,
+        quic_transport::STREAM_CONFIG_SAVE => {
+            handle_quic_config_save_stream(state, send, payload).await
+        }
         other => Err(RuntimeError::Protocol(format!(
             "unexpected QUIC stream type {other}"
         ))),
@@ -609,8 +614,22 @@ async fn handle_admin_connection(
     if n == 0 {
         return Ok(());
     }
-    let request = String::from_utf8_lossy(&buf[..n]);
-    let first_line = request.lines().next().unwrap_or_default();
+    let mut request_bytes = buf[..n].to_vec();
+    let header_end = http_header_end(&request_bytes);
+    let header_len = header_end.unwrap_or(request_bytes.len());
+    let headers = String::from_utf8_lossy(&request_bytes[..header_len]).to_string();
+    let body_start = header_end
+        .map(|index| index + 4)
+        .unwrap_or(request_bytes.len());
+    let content_length = http_content_length(&headers);
+    while request_bytes.len() < body_start + content_length {
+        let mut chunk = vec![0_u8; body_start + content_length - request_bytes.len()];
+        socket.read_exact(&mut chunk).await?;
+        request_bytes.extend_from_slice(&chunk);
+    }
+    let body = String::from_utf8_lossy(&request_bytes[body_start..body_start + content_length])
+        .to_string();
+    let first_line = headers.lines().next().unwrap_or_default();
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or_default();
@@ -623,7 +642,7 @@ async fn handle_admin_connection(
         .admin_token()
         .map(ToString::to_string);
 
-    if !public_path && !admin_authorized(&request, admin_token.as_deref(), peer) {
+    if !public_path && !admin_authorized(&headers, admin_token.as_deref(), peer) {
         write_http(
             &mut socket,
             "401 Unauthorized",
@@ -687,6 +706,9 @@ async fn handle_admin_connection(
             let name = path.trim_start_matches("/v1/services/test/");
             HttpResponse::json("200 OK", service_test_json(&state, name).await)
         }
+        ("POST", "/v1/configs/save") => {
+            HttpResponse::json("200 OK", save_config_json(&state, &body).await)
+        }
         ("GET", "/metrics") => {
             let config = state.config.read().await.clone();
             let connections = state.connections.lock().await;
@@ -743,6 +765,78 @@ async fn service_test_json(state: &Arc<SharedState>, name: &str) -> String {
         return remote_service_test_json(state, &config, &service).await;
     }
     local_service_test_json(state, &config, service).await
+}
+
+async fn save_config_json(state: &Arc<SharedState>, routes_toml: &str) -> String {
+    match save_config_routes(state, routes_toml, true).await {
+        Ok(message) => format!(
+            "{{\"status\":\"saved\",\"message\":\"{}\"}}\n",
+            json_escape(&message)
+        ),
+        Err(error) => format!(
+            "{{\"status\":\"failed\",\"message\":\"{}\"}}\n",
+            json_escape(&error.to_string())
+        ),
+    }
+}
+
+async fn save_config_routes(
+    state: &Arc<SharedState>,
+    routes_toml: &str,
+    sync_peer: bool,
+) -> Result<String, RuntimeError> {
+    let routes_toml = routes_toml.trim();
+    if routes_toml.is_empty() {
+        return Err(RuntimeError::Config("路由配置不能为空".into()));
+    }
+    let current = state.config.read().await.clone();
+    let (current_path, peer_path) = config_pair_paths(&current)?;
+    let current_body = fs::read_to_string(&current_path)?;
+    let peer_body = fs::read_to_string(&peer_path)?;
+    let next_current_body = replace_route_sections(&current_body, routes_toml);
+    let next_peer_body = replace_route_sections(&peer_body, routes_toml);
+    let next_current = Config::parse(&next_current_body, &current_path)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let _next_peer = Config::parse(&next_peer_body, &peer_path)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    ensure_reload_compatible(&current, &next_current)?;
+
+    if sync_peer {
+        if !state.wait_for_tunnel().await {
+            return Err(RuntimeError::Config("隧道未连接，无法同步到对端".into()));
+        }
+        let remote = match current.transport.mode {
+            TransportMode::Quic => remote_quic_config_save(state, &current, routes_toml).await,
+            TransportMode::Tcp | TransportMode::TlsTcp => {
+                remote_tcp_config_save(state, &current, routes_toml).await
+            }
+        }?;
+        if !remote.contains("\"status\":\"saved\"") {
+            return Err(RuntimeError::Config(format!("对端保存失败: {remote}")));
+        }
+    }
+
+    fs::write(&current_path, next_current_body)?;
+    fs::write(&peer_path, next_peer_body)?;
+    state.reload_services().await?;
+    Ok(if sync_peer {
+        "配置已写入本机并同步到对端".into()
+    } else {
+        "配置已写入本机".into()
+    })
+}
+
+async fn requested_config_save_json(state: &Arc<SharedState>, routes_toml: &str) -> String {
+    match save_config_routes(state, routes_toml, false).await {
+        Ok(message) => format!(
+            "{{\"status\":\"saved\",\"message\":\"{}\"}}\n",
+            json_escape(&message)
+        ),
+        Err(error) => format!(
+            "{{\"status\":\"failed\",\"message\":\"{}\"}}\n",
+            json_escape(&error.to_string())
+        ),
+    }
 }
 
 async fn local_service_test_json(
@@ -808,7 +902,7 @@ async fn remote_tcp_service_test(
 ) -> Result<String, RuntimeError> {
     let request_id = state.allocate_stream_id();
     let (tx, mut rx) = mpsc::channel(1);
-    state.service_tests.lock().await.insert(request_id, tx);
+    state.pending_requests.lock().await.insert(request_id, tx);
     if let Err(error) = state
         .send_frame(Frame {
             kind: FRAME_TEST_REQUEST,
@@ -817,7 +911,7 @@ async fn remote_tcp_service_test(
         })
         .await
     {
-        state.service_tests.lock().await.remove(&request_id);
+        state.pending_requests.lock().await.remove(&request_id);
         return Err(error);
     }
 
@@ -825,7 +919,7 @@ async fn remote_tcp_service_test(
         Ok(Some(body)) => Ok(body),
         Ok(None) => Err(RuntimeError::TunnelUnavailable),
         Err(_) => {
-            state.service_tests.lock().await.remove(&request_id);
+            state.pending_requests.lock().await.remove(&request_id);
             Err(RuntimeError::Config("远端测试超时".into()))
         }
     }
@@ -862,6 +956,71 @@ async fn remote_quic_service_test(
     }
     String::from_utf8(response.1)
         .map_err(|_| RuntimeError::Protocol("test response must be UTF-8".into()))
+}
+
+async fn remote_tcp_config_save(
+    state: &Arc<SharedState>,
+    config: &Config,
+    routes_toml: &str,
+) -> Result<String, RuntimeError> {
+    let request_id = state.allocate_stream_id();
+    let (tx, mut rx) = mpsc::channel(1);
+    state.pending_requests.lock().await.insert(request_id, tx);
+    if let Err(error) = state
+        .send_frame(Frame {
+            kind: FRAME_CONFIG_SAVE_REQUEST,
+            stream_id: request_id,
+            payload: routes_toml.as_bytes().to_vec(),
+        })
+        .await
+    {
+        state.pending_requests.lock().await.remove(&request_id);
+        return Err(error);
+    }
+
+    match timeout(config_save_wait(config), rx.recv()).await {
+        Ok(Some(body)) => Ok(body),
+        Ok(None) => Err(RuntimeError::TunnelUnavailable),
+        Err(_) => {
+            state.pending_requests.lock().await.remove(&request_id);
+            Err(RuntimeError::Config("对端保存配置超时".into()))
+        }
+    }
+}
+
+async fn remote_quic_config_save(
+    state: &Arc<SharedState>,
+    config: &Config,
+    routes_toml: &str,
+) -> Result<String, RuntimeError> {
+    let connection = state.quic_connection.read().await.clone();
+    let Some(connection) = connection else {
+        return Err(RuntimeError::TunnelUnavailable);
+    };
+    let (mut send, mut recv) = connection.open_bi().await.map_err(quic_error)?;
+    quic_transport::write_stream_message(
+        &mut send,
+        quic_transport::STREAM_CONFIG_SAVE,
+        routes_toml.as_bytes(),
+    )
+    .await
+    .map_err(quic_error)?;
+    let _ = send.finish();
+
+    let response = timeout(
+        config_save_wait(config),
+        quic_transport::read_stream_message(&mut recv),
+    )
+    .await
+    .map_err(|_| RuntimeError::Config("对端保存配置超时".into()))?
+    .map_err(quic_error)?;
+    if response.0 != FRAME_CONFIG_SAVE_RESPONSE {
+        return Err(RuntimeError::Protocol(
+            "unexpected config save response".into(),
+        ));
+    }
+    String::from_utf8(response.1)
+        .map_err(|_| RuntimeError::Protocol("config save response must be UTF-8".into()))
 }
 
 async fn test_tcp_service(
@@ -934,6 +1093,10 @@ fn service_test_wait(config: &Config, service: &Service) -> Duration {
 
 fn remote_service_test_wait(config: &Config, service: &Service) -> Duration {
     service_test_wait(config, service) + Duration::from_secs(1)
+}
+
+fn config_save_wait(config: &Config) -> Duration {
+    Duration::from_secs(config.defaults.dial_timeout_secs + 5)
 }
 
 fn test_source_addr() -> SocketAddr {
@@ -1139,7 +1302,19 @@ async fn handle_incoming_frame(state: Arc<SharedState>, frame: Frame) -> Result<
         FRAME_TEST_RESPONSE => {
             let body = String::from_utf8(frame.payload)
                 .map_err(|_| RuntimeError::Protocol("test response must be UTF-8".into()))?;
-            if let Some(sender) = state.service_tests.lock().await.remove(&frame.stream_id) {
+            if let Some(sender) = state.pending_requests.lock().await.remove(&frame.stream_id) {
+                let _ = sender.send(body).await;
+            }
+            Ok(())
+        }
+        FRAME_CONFIG_SAVE_REQUEST => {
+            tokio::spawn(handle_config_save_request(state, frame));
+            Ok(())
+        }
+        FRAME_CONFIG_SAVE_RESPONSE => {
+            let body = String::from_utf8(frame.payload)
+                .map_err(|_| RuntimeError::Protocol("config save response must be UTF-8".into()))?;
+            if let Some(sender) = state.pending_requests.lock().await.remove(&frame.stream_id) {
                 let _ = sender.send(body).await;
             }
             Ok(())
@@ -1158,6 +1333,20 @@ async fn handle_test_request(state: Arc<SharedState>, frame: Frame) {
     let _ = state
         .send_frame(Frame {
             kind: FRAME_TEST_RESPONSE,
+            stream_id: frame.stream_id,
+            payload: body.into_bytes(),
+        })
+        .await;
+}
+
+async fn handle_config_save_request(state: Arc<SharedState>, frame: Frame) {
+    let body = match String::from_utf8(frame.payload) {
+        Ok(routes) => requested_config_save_json(&state, &routes).await,
+        Err(_) => "{\"status\":\"failed\",\"message\":\"配置请求必须是 UTF-8\"}\n".to_string(),
+    };
+    let _ = state
+        .send_frame(Frame {
+            kind: FRAME_CONFIG_SAVE_RESPONSE,
             stream_id: frame.stream_id,
             payload: body.into_bytes(),
         })
@@ -1253,6 +1442,21 @@ async fn handle_quic_test_stream(
         .map_err(|_| RuntimeError::Protocol("test request must be UTF-8".into()))?;
     let body = requested_service_test_json(&state, &name).await;
     quic_transport::write_stream_message(&mut send, FRAME_TEST_RESPONSE, body.as_bytes())
+        .await
+        .map_err(quic_error)?;
+    let _ = send.finish();
+    Ok(())
+}
+
+async fn handle_quic_config_save_stream(
+    state: Arc<SharedState>,
+    mut send: SendStream,
+    payload: Vec<u8>,
+) -> Result<(), RuntimeError> {
+    let routes = String::from_utf8(payload)
+        .map_err(|_| RuntimeError::Protocol("config save request must be UTF-8".into()))?;
+    let body = requested_config_save_json(&state, &routes).await;
+    quic_transport::write_stream_message(&mut send, FRAME_CONFIG_SAVE_RESPONSE, body.as_bytes())
         .await
         .map_err(quic_error)?;
     let _ = send.finish();
@@ -1675,6 +1879,43 @@ fn topology_configs(config: &Config) -> Vec<Config> {
     configs
 }
 
+fn config_pair_paths(
+    config: &Config,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), RuntimeError> {
+    let current_path = config
+        .source_path()
+        .ok_or_else(|| RuntimeError::Config("config source path is unavailable".into()))?
+        .to_path_buf();
+    let config_dir = current_path
+        .parent()
+        .ok_or_else(|| RuntimeError::Config("config directory is unavailable".into()))?;
+    let peer_path = match config.role {
+        Role::Relay => config_dir.join("agent.toml"),
+        Role::Agent => config_dir.join("relay.toml"),
+    };
+    Ok((current_path, peer_path))
+}
+
+fn replace_route_sections(config_body: &str, routes_toml: &str) -> String {
+    let cut = first_route_section(config_body).unwrap_or(config_body.len());
+    let head = config_body[..cut].trim_end();
+    format!("{head}\n\n{}\n", routes_toml.trim())
+}
+
+fn first_route_section(config_body: &str) -> Option<usize> {
+    ["[[b_to_a]]", "[[a_to_b]]"]
+        .iter()
+        .filter_map(|marker| {
+            config_body.find(marker).map(|index| {
+                config_body[..index]
+                    .rfind('\n')
+                    .map(|line| line + 1)
+                    .unwrap_or(index)
+            })
+        })
+        .min()
+}
+
 fn service_json(service: &Service) -> String {
     format!(
         "{{\"name\":\"{}\",\"direction\":\"{}\",\"expose\":\"{}\",\"target\":\"{}\",\"allowed_sources\":{}}}",
@@ -1863,6 +2104,24 @@ fn admin_authorized(request: &str, token: Option<&str>, peer: SocketAddr) -> boo
         };
         name.eq_ignore_ascii_case("authorization") && value.trim() == expected
     })
+}
+
+fn http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn http_content_length(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                value.trim().parse().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -242,6 +242,11 @@ impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         let body = fs::read_to_string(path)?;
+        Self::parse(&body, path)
+    }
+
+    pub fn parse(body: &str, path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let path = path.as_ref();
         let mut config: Config = toml::from_str(&body)?;
         config.source_path = Some(path.to_path_buf());
         config.validate()?;
