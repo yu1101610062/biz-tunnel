@@ -11,18 +11,19 @@ const ADMIN_UI: &str = r##"<!doctype html>
   <title>中继拓扑配置</title>
   <style>
     :root {
-      color-scheme: light;
-      --bg: #f4f7fb;
-      --panel: #ffffff;
-      --canvas: #f8fafd;
-      --line: #d9e2ee;
-      --text: #182230;
-      --muted: #667085;
-      --blue: #2563eb;
-      --green: #15945b;
-      --amber: #b7791f;
-      --red: #b42318;
-      --shadow: 0 14px 36px rgba(16, 24, 40, .08);
+      color-scheme: dark;
+      --bg: #070b14;
+      --panel: #101827;
+      --canvas: #0b1220;
+      --card: #141f32;
+      --line: #263449;
+      --text: #e7eef8;
+      --muted: #91a0b7;
+      --blue: #5aa7ff;
+      --green: #39d98a;
+      --amber: #f2b84b;
+      --red: #ff7b72;
+      --shadow: 0 18px 42px rgba(0, 0, 0, .35);
     }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
@@ -41,7 +42,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
       height: 36px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fff;
+      background: var(--card);
       padding: 0 12px;
       cursor: pointer;
       font-weight: 650;
@@ -52,13 +53,13 @@ const ADMIN_UI: &str = r##"<!doctype html>
       background: var(--blue);
       color: #fff;
     }
-    button.subtle { background: #f8fafc; }
+    button.subtle { background: #121c2d; }
     button.danger { color: var(--red); }
     input, textarea, select {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fff;
+      background: #0d1626;
       padding: 9px 10px;
       outline: none;
     }
@@ -70,7 +71,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
       gap: 16px;
       padding: 18px 22px;
       border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, .94);
+      background: rgba(9, 14, 24, .94);
       position: sticky;
       top: 0;
       z-index: 5;
@@ -85,9 +86,9 @@ const ADMIN_UI: &str = r##"<!doctype html>
       align-items: center;
       gap: 7px;
       height: 28px;
-      border: 1px solid #b7dfca;
+      border: 1px solid rgba(57, 217, 138, .35);
       border-radius: 999px;
-      background: #f0fbf5;
+      background: rgba(57, 217, 138, .12);
       color: var(--green);
       padding: 0 10px;
       font-size: 12px;
@@ -101,8 +102,8 @@ const ADMIN_UI: &str = r##"<!doctype html>
       background: currentColor;
     }
     .status-chip.offline {
-      border-color: #efd0a3;
-      background: #fff8eb;
+      border-color: rgba(242, 184, 75, .35);
+      background: rgba(242, 184, 75, .12);
       color: var(--amber);
     }
     .shell {
@@ -131,9 +132,9 @@ const ADMIN_UI: &str = r##"<!doctype html>
     .add-card {
       width: 100%;
       min-height: 84px;
-      border: 1.5px dashed #aac1dd;
+      border: 1.5px dashed #355071;
       border-radius: 8px;
-      background: #f8fbff;
+      background: #0d1626;
       display: grid;
       place-items: center;
       color: var(--blue);
@@ -145,11 +146,11 @@ const ADMIN_UI: &str = r##"<!doctype html>
     .node-card {
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fff;
+      background: var(--card);
       padding: 10px;
       cursor: pointer;
     }
-    .node-card.active { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(37, 99, 235, .12); }
+    .node-card.active { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(90, 167, 255, .18); }
     .node-title {
       display: flex;
       align-items: flex-start;
@@ -168,16 +169,79 @@ const ADMIN_UI: &str = r##"<!doctype html>
     }
     .canvas-panel {
       display: grid;
-      grid-template-rows: auto minmax(520px, 1fr) auto;
+      grid-template-rows: auto auto minmax(520px, 1fr) auto;
       overflow: hidden;
     }
+    .main-tunnel {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr);
+      gap: 14px;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #0d1626;
+    }
+    .main-tunnel-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      padding: 10px;
+      min-width: 0;
+    }
+    .main-tunnel-title {
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 5px;
+    }
+    .main-tunnel-name {
+      font-size: 13px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .main-tunnel-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+    }
+    .main-tunnel-link {
+      display: grid;
+      gap: 4px;
+      justify-items: center;
+      min-width: 170px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .main-tunnel-line {
+      width: 170px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--green), transparent);
+      position: relative;
+    }
+    .main-tunnel-line::before,
+    .main-tunnel-line::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--green);
+      transform: translateY(-50%);
+      box-shadow: 0 0 16px rgba(57, 217, 138, .45);
+    }
+    .main-tunnel-line::before { left: 0; }
+    .main-tunnel-line::after { right: 0; }
     .canvas {
       position: relative;
       min-height: 560px;
       background:
         linear-gradient(var(--canvas), var(--canvas)) padding-box,
-        repeating-linear-gradient(0deg, transparent 0 35px, rgba(145, 158, 171, .08) 36px),
-        repeating-linear-gradient(90deg, transparent 0 35px, rgba(145, 158, 171, .08) 36px);
+        repeating-linear-gradient(0deg, transparent 0 35px, rgba(148, 163, 184, .06) 36px),
+        repeating-linear-gradient(90deg, transparent 0 35px, rgba(148, 163, 184, .06) 36px);
       overflow: hidden;
     }
     .lane {
@@ -185,15 +249,15 @@ const ADMIN_UI: &str = r##"<!doctype html>
       top: 18px;
       bottom: 18px;
       width: calc(50% - 25px);
-      border: 1px solid #dfe7f1;
+      border: 1px solid var(--line);
       border-radius: 8px;
-      background: rgba(255, 255, 255, .72);
+      background: rgba(12, 20, 34, .72);
       padding: 14px;
     }
     .lane.a { left: 18px; }
     .lane.b { right: 18px; }
     .lane-title {
-      color: #344054;
+      color: #cbd5e1;
       font-size: 13px;
       font-weight: 800;
       margin-bottom: 12px;
@@ -204,13 +268,13 @@ const ADMIN_UI: &str = r##"<!doctype html>
       width: min(245px, 88%);
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fff;
+      background: var(--card);
       padding: 10px;
       margin-bottom: 14px;
-      box-shadow: 0 10px 22px rgba(16, 24, 40, .06);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, .22);
       cursor: pointer;
     }
-    .canvas-node.selected { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(37, 99, 235, .12); }
+    .canvas-node.selected { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(90, 167, 255, .18); }
     .canvas-node .path-handle {
       position: absolute;
       right: -13px;
@@ -219,11 +283,15 @@ const ADMIN_UI: &str = r##"<!doctype html>
       height: 26px;
       transform: translateY(-50%);
       border-radius: 999px;
-      border: 1px solid #bcd0eb;
-      background: #fff;
+      border: 1px solid #456991;
+      background: #0d1626;
       color: var(--blue);
-      display: grid;
-      place-items: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+      font-size: 18px;
       font-weight: 800;
     }
     .lane.b .canvas-node .path-handle { left: -13px; right: auto; }
@@ -233,8 +301,8 @@ const ADMIN_UI: &str = r##"<!doctype html>
       bottom: 22px;
       transform: translateX(-50%);
       color: var(--muted);
-      background: rgba(255,255,255,.9);
-      border: 1px dashed #b8c7da;
+      background: rgba(13, 22, 38, .92);
+      border: 1px dashed #3b5575;
       border-radius: 8px;
       padding: 8px 12px;
       font-size: 12px;
@@ -257,9 +325,9 @@ const ADMIN_UI: &str = r##"<!doctype html>
       max-width: 260px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: rgba(255, 255, 255, .95);
+      background: rgba(17, 28, 45, .96);
       padding: 6px 8px;
-      box-shadow: 0 8px 20px rgba(16, 24, 40, .07);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, .3);
       font-size: 12px;
       opacity: 0;
       transform: translateY(4px);
@@ -286,7 +354,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
     .field label {
       display: block;
       margin-bottom: 5px;
-      color: #344054;
+      color: #cbd5e1;
       font-size: 12px;
       font-weight: 750;
     }
@@ -300,24 +368,24 @@ const ADMIN_UI: &str = r##"<!doctype html>
     .seg button {
       border: 0;
       border-radius: 0;
-      background: #fff;
+      background: #0d1626;
     }
-    .seg button.active { background: #eaf1ff; color: var(--blue); }
+    .seg button.active { background: rgba(90, 167, 255, .16); color: var(--blue); }
     .output {
       border-top: 1px solid var(--line);
-      background: #fff;
+      background: #0d1626;
       padding: 12px 14px;
       display: grid;
       gap: 10px;
     }
     .tabs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .tabs button.active { border-color: var(--blue); color: var(--blue); background: #f3f7ff; }
+    .tabs button.active { border-color: var(--blue); color: var(--blue); background: rgba(90, 167, 255, .13); }
     pre {
       max-height: 220px;
       margin: 0;
       overflow: auto;
       border-radius: 8px;
-      background: #101828;
+      background: #050a13;
       color: #e6edf6;
       padding: 12px;
       font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -328,8 +396,8 @@ const ADMIN_UI: &str = r##"<!doctype html>
       align-items: center;
       height: 26px;
       border-radius: 999px;
-      background: #eef6ff;
-      color: #1d4ed8;
+      background: rgba(90, 167, 255, .13);
+      color: var(--blue);
       padding: 0 10px;
       font-size: 12px;
       font-weight: 750;
@@ -347,7 +415,9 @@ const ADMIN_UI: &str = r##"<!doctype html>
       .hint { position: static; transform: none; margin: 0 14px 14px; }
       .path-label { position: relative; left: auto !important; top: auto !important; margin: 8px 14px; max-width: none; opacity: 1; transform: none; }
       svg.links { display: none; }
-      .canvas-panel { grid-template-rows: auto auto auto; }
+      .main-tunnel { grid-template-columns: 1fr; }
+      .main-tunnel-link { justify-items: start; }
+      .canvas-panel { grid-template-rows: auto auto auto auto; }
     }
   </style>
 </head>
@@ -394,6 +464,23 @@ const ADMIN_UI: &str = r##"<!doctype html>
         <div class="row">
           <span id="serviceCount" class="muted">0 条路径</span>
           <span id="lastRefresh" class="muted">未刷新</span>
+        </div>
+      </div>
+      <div class="main-tunnel">
+        <div class="main-tunnel-card">
+          <div class="main-tunnel-title">主隧道主动连接侧</div>
+          <div id="mainTunnelAgent" class="main-tunnel-name">agent role</div>
+          <div id="mainTunnelAgentNote" class="main-tunnel-note">等待运行态</div>
+        </div>
+        <div class="main-tunnel-link">
+          <div>主隧道 QUIC</div>
+          <div class="main-tunnel-line"></div>
+          <div id="mainTunnelState">未连接</div>
+        </div>
+        <div class="main-tunnel-card">
+          <div class="main-tunnel-title">主隧道被连接侧</div>
+          <div id="mainTunnelRelay" class="main-tunnel-name">relay role</div>
+          <div id="mainTunnelRelayNote" class="main-tunnel-note">等待运行态</div>
         </div>
       </div>
       <div id="canvas" class="canvas">
@@ -510,6 +597,13 @@ const ADMIN_UI: &str = r##"<!doctype html>
       role: "",
       activeTab: "relay",
       selection: { type: "path", id: "example-forward" },
+      editing: false,
+      runtimeReady: false,
+      mainTunnel: {
+        connected: false,
+        agent: { name: "agent role", note: "等待运行态" },
+        relay: { name: "relay role", note: "等待运行态" },
+      },
       tests: {},
       nodes: [
         { id: "agent-proxy", lane: "a", name: "agent role", address: "agent.example.local", note: "主动连接侧代理节点" },
@@ -561,6 +655,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
     }
 
     function select(type, id) {
+      state.editing = false;
       state.selection = { type, id };
       render();
     }
@@ -868,6 +963,15 @@ const ADMIN_UI: &str = r##"<!doctype html>
       $("serviceCount").textContent = `${state.paths.length} 条路径`;
     }
 
+    function renderMainTunnel() {
+      $("mainTunnelAgent").textContent = state.mainTunnel.agent.name;
+      $("mainTunnelAgentNote").textContent = state.mainTunnel.agent.note;
+      $("mainTunnelRelay").textContent = state.mainTunnel.relay.name;
+      $("mainTunnelRelayNote").textContent = state.mainTunnel.relay.note;
+      $("mainTunnelState").textContent = state.mainTunnel.connected ? "已连接" : "未连接";
+      $("mainTunnelState").style.color = state.mainTunnel.connected ? "var(--green)" : "var(--amber)";
+    }
+
     function validateTopology() {
       const errors = [];
       const names = new Set();
@@ -878,7 +982,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
         if (!path.target) errors.push(`${path.name} 缺少目标地址`);
       }
       $("checkConfig").textContent = errors.length ? `校验失败 ${errors.length} 项` : "配置校验通过";
-      $("checkConfig").style.background = errors.length ? "#fff1f0" : "#edf9f2";
+      $("checkConfig").style.background = errors.length ? "rgba(255, 123, 114, .14)" : "rgba(57, 217, 138, .14)";
       $("checkConfig").style.color = errors.length ? "var(--red)" : "var(--green)";
       if (errors.length) alert(errors.join("\n"));
     }
@@ -886,7 +990,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
     async function saveConfig() {
       if (state.selection.type === "path") updatePathFromForm();
       $("saveConfigResult").textContent = "正在保存";
-      $("saveConfigResult").style.background = "#fff8eb";
+      $("saveConfigResult").style.background = "rgba(242, 184, 75, .14)";
       $("saveConfigResult").style.color = "var(--amber)";
       try {
         const result = await api("/v1/configs/save", {
@@ -895,17 +999,18 @@ const ADMIN_UI: &str = r##"<!doctype html>
           body: routesToml(),
         });
         $("saveConfigResult").textContent = result.message || result.status;
-        $("saveConfigResult").style.background = result.status === "saved" ? "#edf9f2" : "#fff1f0";
+        $("saveConfigResult").style.background = result.status === "saved" ? "rgba(57, 217, 138, .14)" : "rgba(255, 123, 114, .14)";
         $("saveConfigResult").style.color = result.status === "saved" ? "var(--green)" : "var(--red)";
         refreshRuntime();
       } catch (error) {
         $("saveConfigResult").textContent = error.message;
-        $("saveConfigResult").style.background = "#fff1f0";
+        $("saveConfigResult").style.background = "rgba(255, 123, 114, .14)";
         $("saveConfigResult").style.color = "var(--red)";
       }
     }
 
     async function refreshRuntime() {
+      const firstLoad = !state.runtimeReady;
       try {
         const [health, tunnel, topology, connections] = await Promise.all([
           api("/healthz"),
@@ -915,6 +1020,7 @@ const ADMIN_UI: &str = r##"<!doctype html>
         ]);
         state.role = health.role || state.role;
         state.tunnelId = tunnel.id || state.tunnelId;
+        state.mainTunnel.connected = !!tunnel.agent_connected;
         $("statusChip").textContent = tunnel.agent_connected ? "agent 已连接 relay" : "agent 未连接 relay";
         $("statusChip").classList.toggle("offline", !tunnel.agent_connected);
         $("tunnelText").textContent = `${health.role || "node"} · ${state.tunnelId} · ${connections.active_streams || 0} 条活动连接`;
@@ -924,13 +1030,13 @@ const ADMIN_UI: &str = r##"<!doctype html>
         $("statusChip").textContent = "管理接口未连接";
         $("statusChip").classList.add("offline");
       }
-      render();
+      state.runtimeReady = true;
+      render(!firstLoad);
     }
 
     function syncTopology(topology) {
       const runtimeNodes = (topology.nodes || []).map((node) => {
         const agent = node.role === "agent";
-        const id = agent ? "agent-proxy" : "relay-proxy";
         const address = agent
           ? (node.node_id || node.admin_listen || node.address || "")
           : (node.address || node.node_id || node.admin_listen || "");
@@ -941,23 +1047,26 @@ const ADMIN_UI: &str = r##"<!doctype html>
           node.admin_listen ? `admin: ${node.admin_listen}` : "",
         ].filter(Boolean);
         return {
-          id,
-          lane: agent ? "a" : "b",
+          role: node.role,
           name: agent ? "agent role" : "relay role",
           address,
           note: details.join(" / "),
         };
       });
-      const hasAgent = runtimeNodes.some((node) => node.id === "agent-proxy");
-      const hasRelay = runtimeNodes.some((node) => node.id === "relay-proxy");
-      if (!hasAgent) runtimeNodes.unshift({ id: "agent-proxy", lane: "a", name: "agent role", address: "agent.example.local", note: "主动连接侧代理节点" });
-      if (!hasRelay) runtimeNodes.push({ id: "relay-proxy", lane: "b", name: "relay role", address: state.relayAddr, note: "被连接侧中继节点" });
-      state.nodes = runtimeNodes;
+      const agentNode = runtimeNodes.find((node) => node.role === "agent");
+      const relayNode = runtimeNodes.find((node) => node.role === "relay");
+      state.mainTunnel.agent = agentNode
+        ? { name: `${agentNode.name} ${agentNode.address}`, note: agentNode.note }
+        : { name: "agent role", note: "主动连接侧代理节点" };
+      state.mainTunnel.relay = relayNode
+        ? { name: `${relayNode.name} ${relayNode.address}`, note: relayNode.note }
+        : { name: "relay role", note: "被连接侧中继节点" };
+      state.nodes = [];
       if (topology.services) syncRuntimeServices(topology.services);
     }
 
     function syncRuntimeServices(services) {
-      const nodes = state.nodes.filter((node) => node.id === "agent-proxy" || node.id === "relay-proxy");
+      const nodes = [];
       state.paths = services.map((service) => {
         const old = state.paths.find((item) => item.name === service.name);
         const direction = service.direction;
@@ -992,14 +1101,17 @@ const ADMIN_UI: &str = r##"<!doctype html>
         };
       });
       state.nodes = nodes;
-      if (!state.paths.some((path) => path.id === state.selection.id)) {
+      if (state.selection.type === "path" && !state.paths.some((path) => path.id === state.selection.id)) {
+        state.selection = { type: "path", id: state.paths[0]?.id };
+      } else if (state.selection.type === "node" && !state.nodes.some((node) => node.id === state.selection.id)) {
         state.selection = { type: "path", id: state.paths[0]?.id };
       }
     }
 
-    function render() {
+    function render(skipInspector = false) {
       renderNodes();
-      renderInspector();
+      if (!skipInspector && !state.editing) renderInspector();
+      renderMainTunnel();
       renderOutput();
       requestAnimationFrame(renderLinks);
     }
@@ -1047,6 +1159,10 @@ const ADMIN_UI: &str = r##"<!doctype html>
     $("nodeAddress").addEventListener("change", updateNodeFromForm);
     $("nodeLane").addEventListener("change", updateNodeFromForm);
     $("nodeNote").addEventListener("change", updateNodeFromForm);
+    document.querySelectorAll(".inspector input, .inspector textarea, .inspector select").forEach((el) => {
+      el.addEventListener("focusin", () => { state.editing = true; });
+      el.addEventListener("focusout", () => { setTimeout(() => { state.editing = false; }, 0); });
+    });
     $("copyConfig").addEventListener("click", () => navigator.clipboard?.writeText(configFor(state.activeTab)));
     $("saveConfig").addEventListener("click", saveConfig);
     $("saveToken").addEventListener("click", () => sessionStorage.setItem("bizTunnelAdminToken", tokenInput.value.trim()));
